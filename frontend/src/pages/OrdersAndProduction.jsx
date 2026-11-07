@@ -1,5 +1,5 @@
 import React, { useContext } from 'react';
-import { LanguageContext } from '../App';
+import { LanguageContext } from '../contexts/LanguageContext';
 import Orders from './Orders';
 
 export default function OrdersAndProduction() {

@@ -5,7 +5,7 @@ import { categoriesAPI } from '../api';
 import { Plus, Trash2, Edit2, Search } from 'lucide-react';
 import Toast from '../components/Toast';
 import LoadingSkeleton from '../components/LoadingSkeleton';
-import { LanguageContext } from '../App';
+import { LanguageContext } from '../contexts/LanguageContext';
 
 export default function Categories() {
   const { language } = useContext(LanguageContext);

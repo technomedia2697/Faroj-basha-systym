@@ -20,7 +20,7 @@ import {
 import Toast from '../components/Toast';
 import LoadingSkeleton from '../components/LoadingSkeleton';
 import { authAPI } from '../api';
-import { LanguageContext } from '../App';
+import { LanguageContext } from '../contexts/LanguageContext';
 import { AuthContext } from '../contexts/AuthContext';
 
 export default function Settings() {

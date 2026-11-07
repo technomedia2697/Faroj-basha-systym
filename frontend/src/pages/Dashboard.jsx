@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from 'react-query';
 import { dashboardAPI, ordersAPI, productsAPI, categoriesAPI, stockAPI } from '../api';
 import { AlertTriangle, Package, Zap, TrendingUp, Plus, Trash2 } from 'lucide-react';
 import { Line } from 'react-chartjs-2';
-import { LanguageContext } from '../App';
+import { LanguageContext } from '../contexts/LanguageContext';
 import Toast from '../components/Toast';
 import LoadingSkeleton from '../components/LoadingSkeleton';
 import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, Filler } from 'chart.js';

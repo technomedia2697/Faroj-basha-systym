@@ -1,7 +1,7 @@
 import React, { useState, useContext } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AlertCircle, Globe, Eye, EyeOff } from 'lucide-react';
-import { LanguageContext } from '../App';
+import { LanguageContext } from '../contexts/LanguageContext';
 import { AuthContext } from '../contexts/AuthContext';
 import { authAPI } from '../api';
 import BrandLogo from '../components/BrandLogo';

@@ -5,7 +5,7 @@ import { Plus, Trash2, Check, X, Search, ExternalLink } from 'lucide-react';
 import Modal from '../components/Modal';
 import Toast from '../components/Toast';
 import LoadingSkeleton from '../components/LoadingSkeleton';
-import { LanguageContext } from '../App';
+import { LanguageContext } from '../contexts/LanguageContext';
 import { AuthContext } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
 

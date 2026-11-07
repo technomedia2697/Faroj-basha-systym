@@ -3,6 +3,7 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import { QueryClient, QueryClientProvider } from 'react-query';
 import Layout from './components/Layout';
 import { AuthProvider } from './contexts/AuthContext';
+import { LanguageContext } from './contexts/LanguageContext';
 import './index.css';
 
 const Login = lazy(() => import('./pages/Login'));
@@ -17,9 +18,6 @@ const Settings = lazy(() => import('./pages/Settings'));
 const Customers = lazy(() => import('./pages/Customers'));
 
 const queryClient = new QueryClient();
-
-// Language Context
-export const LanguageContext = React.createContext();
 
 function RouteLoadingFallback() {
   const { language } = useContext(LanguageContext);

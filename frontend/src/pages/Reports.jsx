@@ -4,7 +4,7 @@ import { reportsAPI } from '../api';
 import { Download } from 'lucide-react';
 import Toast from '../components/Toast';
 import LoadingSkeleton from '../components/LoadingSkeleton';
-import { LanguageContext } from '../App';
+import { LanguageContext } from '../contexts/LanguageContext';
 
 export default function Reports() {
   const { language } = useContext(LanguageContext);

@@ -14,7 +14,7 @@ import {
   Globe,
   Users2,
 } from 'lucide-react';
-import { LanguageContext } from '../App';
+import { LanguageContext } from '../contexts/LanguageContext';
 import { AuthContext } from '../contexts/AuthContext';
 import BrandLogo from './BrandLogo';
 

@@ -5,7 +5,7 @@ import { Plus, ArrowUp, ArrowDown } from 'lucide-react';
 import Modal from '../components/Modal';
 import Toast from '../components/Toast';
 import LoadingSkeleton from '../components/LoadingSkeleton';
-import { LanguageContext } from '../App';
+import { LanguageContext } from '../contexts/LanguageContext';
 
 export default function StockMovements() {
   const { language } = useContext(LanguageContext);

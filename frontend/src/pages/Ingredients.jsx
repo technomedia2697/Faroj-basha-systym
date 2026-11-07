@@ -6,7 +6,7 @@ import Modal from '../components/Modal';
 import IngredientForm from '../components/IngredientForm';
 import Toast from '../components/Toast';
 import LoadingSkeleton from '../components/LoadingSkeleton';
-import { LanguageContext } from '../App';
+import { LanguageContext } from '../contexts/LanguageContext';
 
 export default function Ingredients() {
   const { language } = useContext(LanguageContext);
