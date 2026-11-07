@@ -1,0 +1,8 @@
+node_modules/
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
+frontend/atlas-credentials.env
+frontend/server/.env
+frontend/server/.env.*
+frontend/dist/
