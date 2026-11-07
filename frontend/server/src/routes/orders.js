@@ -6,11 +6,41 @@ import Recipe from '../models/Recipe.js';
 import Ingredient from '../models/Ingredient.js';
 import StockMovement from '../models/StockMovement.js';
 import ProductionLog from '../models/ProductionLog.js';
+import Customer from '../models/Customer.js';
 import { verifyToken } from '../middleware/auth.js';
 import { requirePermission, requireRole } from '../middleware/permissions.js';
 import { sendRouteError } from '../middleware/routeError.js';
+import { normalizePhone } from '../utils/phone.js';
 
 const router = express.Router();
+
+async function awardCustomerForOrder(order, session) {
+  const normalizedPhone = normalizePhone(order.customer_phone);
+  if (!normalizedPhone) return null;
+
+  const updates = {
+    $set: {
+      name: order.customer_name.trim(),
+      phone: order.customer_phone.trim(),
+      normalizedPhone,
+      updatedAt: new Date(),
+    },
+    $inc: {
+      loyaltyPoints: 1,
+      orderCount: 1,
+      totalSpent: order.total,
+    },
+  };
+  if (order.customer_address.trim()) {
+    updates.$set.address = order.customer_address.trim();
+  }
+
+  return Customer.findOneAndUpdate(
+    { normalizedPhone },
+    updates,
+    { new: true, upsert: true, runValidators: true, session, setDefaultsOnInsert: true }
+  );
+}
 
 // GET all orders - All users can view
 router.get('/', verifyToken, requirePermission('view_orders'), async (req, res) => {
@@ -18,6 +48,7 @@ router.get('/', verifyToken, requirePermission('view_orders'), async (req, res) 
     const orders = await Order.find()
       .populate('items.product_id', 'name price')
       .populate('createdBy', 'name email')
+      .populate('customerId', 'name phone loyaltyPoints')
       .sort({ createdAt: -1 })
       .limit(100);
 
@@ -57,7 +88,7 @@ router.post('/', verifyToken, requirePermission('create_orders'), async (req, re
     items,
     discount: requestedDiscount = 0,
     tax: requestedTax = 0,
-    payment_method = 'cash',
+    payment_method: submittedPaymentMethod = 'cash',
     notes = '',
     type = 'takeaway',
     table_number = null,
@@ -87,9 +118,14 @@ router.post('/', verifyToken, requirePermission('create_orders'), async (req, re
   if (!['table', 'takeaway', 'delivery'].includes(type)) {
     return res.status(400).json({ error: 'Invalid order type' });
   }
-  if (!['cash', 'card', 'other'].includes(payment_method)) {
+  if (
+    typeof submittedPaymentMethod !== 'string' ||
+    !submittedPaymentMethod.trim() ||
+    submittedPaymentMethod.trim().length > 80
+  ) {
     return res.status(400).json({ error: 'Invalid payment method' });
   }
+  const payment_method = submittedPaymentMethod.trim();
   if (type === 'delivery' && !customer_address.trim()) {
     return res.status(400).json({ error: 'Customer address is required for delivery orders' });
   }
@@ -113,7 +149,8 @@ router.post('/', verifyToken, requirePermission('create_orders'), async (req, re
     if (idempotencyKey) {
       const existingOrder = await Order.findOne({ idempotencyKey, createdBy: req.userId })
         .populate('items.product_id', 'name price')
-        .populate('createdBy', 'name email');
+        .populate('createdBy', 'name email')
+        .populate('customerId', 'name phone loyaltyPoints');
       if (existingOrder) {
         return res.status(200).json(existingOrder);
       }
@@ -240,6 +277,7 @@ router.post('/', verifyToken, requirePermission('create_orders'), async (req, re
     const order = new Order({
       customer_name,
       customer_phone: customer_phone.trim(),
+      customer_phone_normalized: normalizePhone(customer_phone),
       customer_address,
       items: processedItems,
       subtotal,
@@ -257,52 +295,52 @@ router.post('/', verifyToken, requirePermission('create_orders'), async (req, re
       ...(idempotencyKey ? { idempotencyKey } : {}),
     });
 
-    if (['takeaway', 'delivery'].includes(type)) {
-      const session = await mongoose.startSession();
-      session.startTransaction();
-      try {
-        const consumed = await deductInventoryForOrderAtomic(order, req.userId, session);
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    try {
+      let consumed = null;
+      if (['takeaway', 'delivery'].includes(type)) {
+        consumed = await deductInventoryForOrderAtomic(order, req.userId, session);
         order.inventory_deducted = true;
-        const savedOrder = await order.save({ session });
-        await session.commitTransaction();
-        const populatedOrder = await Order.findById(savedOrder._id)
-          .populate('items.product_id', 'name price')
-          .populate('createdBy', 'name email');
-
-        populatedOrder._doc.consumed = consumed;
-        return res.status(201).json(populatedOrder);
-      } catch (err) {
-        await session.abortTransaction();
-        if (err.code === 11000 && idempotencyKey) {
-          const existingOrder = await Order.findOne({ idempotencyKey, createdBy: req.userId })
-            .populate('items.product_id', 'name price')
-            .populate('createdBy', 'name email');
-          if (existingOrder) {
-            return res.status(200).json(existingOrder);
-          }
-        }
-        if (err.code === 'INSUFFICIENT_STOCK') {
-          return res.status(409).json({ error: err.message });
-        }
-        throw err;
-      } finally {
-        await session.endSession();
       }
-    }
 
-    const savedOrder = await order.save();
-    
-    const populatedOrder = await Order.findById(savedOrder._id)
-      .populate('items.product_id', 'name price')
-      .populate('createdBy', 'name email');
-    
-    res.status(201).json(populatedOrder);
+      const customer = await awardCustomerForOrder(order, session);
+      if (customer) {
+        order.customerId = customer._id;
+        order.loyaltyPointsAwarded = true;
+      }
+      const savedOrder = await order.save({ session });
+      await session.commitTransaction();
+
+      const populatedOrder = await Order.findById(savedOrder._id)
+        .populate('items.product_id', 'name price')
+        .populate('createdBy', 'name email')
+        .populate('customerId', 'name phone loyaltyPoints');
+      if (consumed) populatedOrder._doc.consumed = consumed;
+      return res.status(201).json(populatedOrder);
+    } catch (err) {
+      await session.abortTransaction();
+      if (err.code === 11000 && idempotencyKey) {
+        const existingOrder = await Order.findOne({ idempotencyKey, createdBy: req.userId })
+          .populate('items.product_id', 'name price')
+          .populate('createdBy', 'name email')
+          .populate('customerId', 'name phone loyaltyPoints');
+        if (existingOrder) return res.status(200).json(existingOrder);
+      }
+      if (err.code === 'INSUFFICIENT_STOCK') {
+        return res.status(409).json({ error: err.message });
+      }
+      throw err;
+    } finally {
+      await session.endSession();
+    }
   } catch (error) {
     if (error.code === 11000 && idempotencyKey) {
       try {
         const existingOrder = await Order.findOne({ idempotencyKey, createdBy: req.userId })
           .populate('items.product_id', 'name price')
-          .populate('createdBy', 'name email');
+          .populate('createdBy', 'name email')
+          .populate('customerId', 'name phone loyaltyPoints');
         if (existingOrder) {
           return res.status(200).json(existingOrder);
         }

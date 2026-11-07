@@ -1,12 +1,15 @@
 import React, { useState, useContext, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from 'react-query';
-import { dashboardAPI, ordersAPI, productsAPI, categoriesAPI, stockAPI } from '../api';
+import { dashboardAPI, ordersAPI, productsAPI, categoriesAPI, stockAPI, customersAPI, isDemoMode } from '../api';
 import { AlertTriangle, Package, Zap, TrendingUp, Plus, Trash2 } from 'lucide-react';
 import { Line } from 'react-chartjs-2';
 import { LanguageContext } from '../contexts/LanguageContext';
 import Toast from '../components/Toast';
 import LoadingSkeleton from '../components/LoadingSkeleton';
 import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, Filler } from 'chart.js';
+import { calculateOrderTotals, getDefaultDeliveryFee, getStoredCustomers, getTaxRate, normalizePhone, saveOrderCustomer } from '../utils/orderHelpers';
+import { printInvoice } from '../utils/printInvoice';
+import PaymentMethodField from '../components/PaymentMethodField';
 
 // Register Chart.js components
 ChartJS.register(
@@ -46,7 +49,7 @@ export default function Dashboard() {
     customer_phone: '',
     items: [],
     discount: 0,
-    tax: 0,
+    tax: getTaxRate(),
     payment_method: 'cash',
     notes: '',
     type: 'takeaway',
@@ -60,6 +63,19 @@ export default function Dashboard() {
   const [selectedCategory, setSelectedCategory] = useState('');
   // Show consumed summary (from orders or production) in the Dashboard quick form
   const [consumedSummary, setConsumedSummary] = useState(null);
+  const [customers, setCustomers] = useState(getStoredCustomers);
+
+  useQuery('customers', async () => {
+    if (isDemoMode) return getStoredCustomers();
+    const response = await customersAPI.getAll();
+    return Array.isArray(response.data) ? response.data : [];
+  }, {
+    onSuccess: (savedCustomers) => setCustomers(savedCustomers),
+    onError: (error) => {
+      console.error('[Dashboard] Failed to load customers:', error);
+      setToast({ type: 'error', message: 'تعذر تحميل العملاء المحفوظين' });
+    },
+  });
 
   useEffect(() => {
     const handler = (e) => {
@@ -71,7 +87,22 @@ export default function Dashboard() {
 
   const queryClient = useQueryClient();
   const createRequestInFlight = useRef(false);
+  const pendingInvoiceWindow = useRef(null);
   const idempotencyState = useRef({ fingerprint: '', key: '' });
+
+  useEffect(() => {
+    if (!isDemoMode) return undefined;
+    const refreshCustomers = () => setCustomers(getStoredCustomers());
+    const refreshTaxRate = () => setOrderForm((current) => ({ ...current, tax: getTaxRate() }));
+    window.addEventListener('customersUpdated', refreshCustomers);
+    window.addEventListener('storage', refreshCustomers);
+    window.addEventListener('storageUpdated', refreshTaxRate);
+    return () => {
+      window.removeEventListener('customersUpdated', refreshCustomers);
+      window.removeEventListener('storage', refreshCustomers);
+      window.removeEventListener('storageUpdated', refreshTaxRate);
+    };
+  }, []);
   const { data: summary, isLoading: summaryLoading } = useQuery('dashboard-summary', async () => {
     const res = await dashboardAPI.getSummary();
     return res.data;
@@ -133,7 +164,36 @@ export default function Dashboard() {
   const createMutation = useMutation((data) => ordersAPI.create(data), {
     onSuccess: (res) => {
       idempotencyState.current = { fingerprint: '', key: '' };
-      setToast({ type: 'success', message: currentLabels.orderSuccess });
+      let customerSaveFailed = false;
+      let loyaltyResult = null;
+      if (isDemoMode) {
+        try {
+        loyaltyResult = saveOrderCustomer(res.data);
+        setCustomers(getStoredCustomers());
+        } catch (error) {
+          console.error('[Dashboard] Failed to save demo customer details:', error);
+          customerSaveFailed = true;
+        }
+      } else {
+        const savedCustomer = res.data?.customerId;
+        loyaltyResult = {
+          pointsEarned: Boolean(res.data?.loyaltyPointsAwarded),
+          pointsBalance: Number(savedCustomer?.loyaltyPoints) || 0,
+        };
+        queryClient.invalidateQueries('customers');
+      }
+      const invoiceOpened = printInvoice(res.data, pendingInvoiceWindow.current);
+      pendingInvoiceWindow.current = null;
+      setToast({
+        type: customerSaveFailed || !invoiceOpened ? 'warning' : 'success',
+        message: customerSaveFailed
+          ? 'تم إنشاء الطلب لكن تعذر حفظ بيانات العميل'
+          : !invoiceOpened
+            ? 'تم إنشاء الطلب لكن تعذر فتح الفاتورة. اسمح بالنوافذ المنبثقة ثم أعد المحاولة من قسم الطلبات'
+          : loyaltyResult?.pointsEarned
+            ? `تم إنشاء الطلب وإضافة نقطة ولاء للعميل. رصيده الآن ${loyaltyResult.pointsBalance} نقطة`
+            : 'تم إنشاء الطلب؛ لم تُضف نقطة ولاء لعدم تسجيل رقم هاتف العميل',
+      });
       queryClient.invalidateQueries('orders');
       resetForm();
       const consumed = res?.data?.consumed;
@@ -142,6 +202,10 @@ export default function Dashboard() {
       }
     },
     onError: (error) => {
+      if (pendingInvoiceWindow.current && !pendingInvoiceWindow.current.closed) {
+        pendingInvoiceWindow.current.close();
+      }
+      pendingInvoiceWindow.current = null;
       setToast({ 
         type: 'error', 
         message: error?.response?.data?.message || currentLabels.orderError 
@@ -198,7 +262,7 @@ export default function Dashboard() {
       customer_phone: '',
       items: [],
       discount: 0,
-      tax: 0,
+      tax: getTaxRate(),
       payment_method: 'cash',
       notes: '',
       type: 'takeaway',
@@ -243,7 +307,10 @@ export default function Dashboard() {
     setSelectedQuantity('1');
   };
 
-  const subtotal = orderForm.items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+  const currentDeliveryFee = orderForm.type === 'delivery'
+    ? Number(orderForm.delivery_fee === '' ? getDefaultDeliveryFee() : orderForm.delivery_fee)
+    : 0;
+  const orderTotals = calculateOrderTotals(orderForm.items, orderForm.discount, orderForm.tax, currentDeliveryFee);
 
   const chooseMenuItem = (item) => {
     setSelectedProduct(item.name);
@@ -254,7 +321,7 @@ export default function Dashboard() {
   // Auto-fill delivery fee when cashier selects delivery
   useEffect(() => {
     if (orderForm.type === 'delivery' && (orderForm.delivery_fee === '' || orderForm.delivery_fee === null || typeof orderForm.delivery_fee === 'undefined')) {
-      const fee = JSON.parse(localStorage.getItem('appSettings') || '{}').deliveryFeeDefault || 0;
+      const fee = getDefaultDeliveryFee();
       setOrderForm(prev => ({ ...prev, delivery_fee: fee }));
     }
   }, [orderForm.type]);
@@ -265,11 +332,7 @@ export default function Dashboard() {
   };
 
   const calculateTotal = () => {
-    const subtotal = orderForm.items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-    const afterDiscount = subtotal - (orderForm.discount || 0);
-    const taxAmount = Number(orderForm.tax || 0);
-    const delivery = orderForm.type === 'delivery' ? (Number(orderForm.delivery_fee || JSON.parse(localStorage.getItem('appSettings')||'{}').deliveryFeeDefault || 0)) : 0;
-    return afterDiscount + taxAmount + delivery;
+    return orderTotals.total;
   };
 
   const handleSubmitOrder = (e) => {
@@ -299,33 +362,38 @@ export default function Dashboard() {
       return;
     }
     // Calculate totals
-    const discountAmount = orderForm.discount || 0;
-    if (!Number.isFinite(Number(discountAmount)) || Number(discountAmount) < 0 || Number(discountAmount) > subtotal) {
-      setToast({ type: 'warning', message: 'الخصم يجب أن يكون بين صفر وإجمالي المنتجات' });
+    const discountPercent = Number(orderForm.discount || 0);
+    if (!Number.isFinite(discountPercent) || discountPercent < 0 || discountPercent > 100) {
+      setToast({ type: 'warning', message: 'نسبة الخصم يجب أن تكون بين 0 و100%' });
       return;
     }
-    const afterDiscount = subtotal - discountAmount;
-    const taxAmount = Number(orderForm.tax || 0);
-    if (!Number.isFinite(taxAmount) || taxAmount < 0) {
+    const taxRate = Number(orderForm.tax);
+    if (!Number.isFinite(taxRate) || taxRate < 0) {
       setToast({ type: 'warning', message: 'قيمة الضريبة غير صحيحة' });
       return;
     }
-    const deliveryAmount = orderForm.type === 'delivery' ? Number(orderForm.delivery_fee || JSON.parse(localStorage.getItem('appSettings')||'{}').deliveryFeeDefault || 0) : 0;
-    const totalAmount = afterDiscount + taxAmount + deliveryAmount;
+    const defaultDeliveryFee = getDefaultDeliveryFee();
+    const deliveryAmount = orderForm.type === 'delivery'
+      ? Number(orderForm.delivery_fee === '' ? defaultDeliveryFee : orderForm.delivery_fee)
+      : 0;
+    if (!Number.isFinite(deliveryAmount) || deliveryAmount < 0) {
+      setToast({ type: 'warning', message: 'رسوم التوصيل غير صحيحة' });
+      return;
+    }
+    const totals = calculateOrderTotals(orderForm.items, discountPercent, taxRate, deliveryAmount);
 
     // Build order data
-    const settings = JSON.parse(localStorage.getItem('appSettings') || '{}');
     const orderData = {
       customer_name: orderForm.customer_name,
       customer_phone: orderForm.customer_phone || '',
       items: orderForm.items,
-      discount: discountAmount,
-      tax: taxAmount,
-      total: totalAmount,
-      tax_rate: settings.taxRate || 14,
+      discount: totals.discount,
+      tax: totals.tax,
+      total: totals.total,
+      tax_rate: taxRate,
       payment_method: orderForm.payment_method || 'cash',
       notes: orderForm.notes || '',
-      subtotal: subtotal,
+      subtotal: totals.subtotal,
       // New fields
       type: orderForm.type || 'takeaway',
       customer_address: orderForm.customer_address || '',
@@ -337,28 +405,8 @@ export default function Dashboard() {
       idempotencyState.current = { fingerprint, key: window.crypto.randomUUID() };
     }
     orderData.idempotency_key = idempotencyState.current.key;
-    if (orderData.customer_name && orderData.customer_phone) {
-      try {
-        const savedCustomers = JSON.parse(localStorage.getItem('demoCustomers') || '[]');
-        const existingCustomer = savedCustomers.find((customer) => customer.phone === orderData.customer_phone);
-        const customer = {
-          id: existingCustomer?.id || window.crypto.randomUUID(),
-          name: orderData.customer_name.trim(),
-          phone: orderData.customer_phone.trim(),
-          address: orderData.customer_address || existingCustomer?.address || '',
-          notes: existingCustomer?.notes || '',
-          nextFollowUp: existingCustomer?.nextFollowUp || '',
-          createdAt: existingCustomer?.createdAt || new Date().toISOString(),
-        };
-        const nextCustomers = existingCustomer
-          ? savedCustomers.map((item) => item.id === existingCustomer.id ? { ...item, ...customer } : item)
-          : [customer, ...savedCustomers];
-        localStorage.setItem('demoCustomers', JSON.stringify(nextCustomers));
-      } catch (error) {
-        console.error('Unable to save customer locally', error);
-      }
-    }
     createRequestInFlight.current = true;
+    pendingInvoiceWindow.current = window.open('', '_blank', 'popup,width=420,height=720');
     createMutation.mutate(orderData);
   };
 
@@ -434,46 +482,72 @@ export default function Dashboard() {
         </div>
 
       {/* Main Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-[minmax(280px,320px)_minmax(0,1fr)] gap-4 sm:gap-6 lg:gap-8">
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(340px,390px)_minmax(0,1fr)] gap-4 sm:gap-6 lg:gap-8">
         {/* Quick Order Form - Left Side */}
-        <div className="order-last lg:order-first animate-slideIn min-w-0">
-          <div className="card sticky top-4 sm:top-6 lg:top-8 max-h-[calc(100vh-8rem)] overflow-y-auto p-4 sm:p-5">
-            <h2 className="text-xl sm:text-2xl font-bold mb-4 sm:mb-6 flex items-center gap-2">
+        <div className="order-first animate-slideIn min-w-0">
+          <div className="card sticky top-3 sm:top-4 lg:top-6 max-h-[calc(100vh-5rem)] overflow-y-auto !p-3 sm:!p-4">
+            <h2 className="mb-3 flex items-center gap-2 text-lg font-bold sm:text-xl">
               <Plus className="w-5 h-5 sm:w-6 sm:h-6 text-accent" />
               طلب جديد سريع
             </h2>
             
-            <form onSubmit={handleSubmitOrder} className="space-y-3 sm:space-y-4">
-              <div>
-                <label className="block text-xs sm:text-sm font-semibold mb-1 sm:mb-2">اسم العميل *</label>
-                <input
-                  type="text"
-                  className="input text-sm sm:text-base"
-                  value={orderForm.customer_name}
-                  onChange={(e) => setOrderForm({ ...orderForm, customer_name: e.target.value })}
-                  placeholder="أحمد محمد"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs sm:text-sm font-semibold mb-1 sm:mb-2">الهاتف</label>
-                <input
-                  type="tel"
-                  className="input text-sm sm:text-base"
-                  value={orderForm.customer_phone}
-                  onChange={(e) => setOrderForm({ ...orderForm, customer_phone: e.target.value })}
-                  placeholder="0123456789"
-                />
-              </div>
+            <form onSubmit={handleSubmitOrder} className="space-y-2.5">
+              <section className="rounded-xl border border-white/10 bg-white/[0.03] p-2.5">
+                <h3 className="mb-2 text-xs font-bold text-brand-orange">بيانات العميل</h3>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="col-span-2">
+                    <label className="mb-1 block text-xs font-medium">اختيار عميل محفوظ</label>
+                    <select
+                      className="input !px-3 !py-2 text-sm"
+                      value={customers.find((customer) => normalizePhone(customer.phone) === normalizePhone(orderForm.customer_phone))?._id || customers.find((customer) => normalizePhone(customer.phone) === normalizePhone(orderForm.customer_phone))?.id || ''}
+                      onChange={(e) => {
+                        const customer = customers.find((item) => (item._id || item.id) === e.target.value);
+                        setOrderForm((current) => ({
+                          ...current,
+                          customer_name: customer?.name || '',
+                          customer_phone: customer?.phone || '',
+                          customer_address: customer?.address || '',
+                        }));
+                      }}
+                    >
+                      <option value="">عميل جديد</option>
+                      {customers.map((customer) => (
+                        <option key={customer._id || customer.id} value={customer._id || customer.id}>{customer.name} — {customer.phone}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-medium">اسم العميل *</label>
+                    <input
+                      type="text"
+                      className="input !px-3 !py-2 text-sm"
+                      value={orderForm.customer_name}
+                      onChange={(e) => setOrderForm({ ...orderForm, customer_name: e.target.value })}
+                      placeholder="أحمد محمد"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-medium">الهاتف</label>
+                    <input
+                      type="tel"
+                      className="input !px-3 !py-2 text-sm"
+                      value={orderForm.customer_phone}
+                      onChange={(e) => setOrderForm({ ...orderForm, customer_phone: e.target.value })}
+                      placeholder="0123456789"
+                    />
+                  </div>
+                </div>
+              </section>
 
               {/* Category and portion picker */}
-              <div className="space-y-2 rounded-xl border border-white/10 bg-black/10 p-3">
+              <section className="space-y-2 rounded-xl border border-white/10 bg-white/[0.03] p-2.5">
                 <div className="flex items-center justify-between gap-2">
-                  <label className="block text-xs sm:text-sm font-semibold">اختيار الصنف</label>
-                  <span className="text-[11px] text-gray-400">الفئة ثم الصنف</span>
+                  <h3 className="text-sm font-bold text-brand-orange">المنتجات</h3>
+                  <span className="text-xs text-gray-400">{orderForm.items.length} منتج</span>
                 </div>
-                <div className="grid max-h-32 grid-cols-2 gap-2 overflow-y-auto sm:max-h-40">
+                <label className="block text-xs font-semibold">اختيار الصنف: الفئة ثم الصنف</label>
+                <div className="flex max-h-16 flex-wrap gap-1.5 overflow-y-auto">
                   {categories.map((category) => (
                     <button
                       key={category._id}
@@ -484,7 +558,7 @@ export default function Dashboard() {
                         setSelectedProductId('');
                         setSelectedProductPrice('');
                       }}
-                      className={`rounded-lg px-3 py-2 text-sm font-bold transition ${
+                      className={`shrink-0 rounded-lg px-3 py-1.5 text-xs font-bold transition ${
                         selectedCategory === category._id
                           ? 'bg-brand-red text-white shadow-lg'
                           : 'bg-white/5 text-gray-300 hover:bg-brand-deep-purple/50'
@@ -499,13 +573,13 @@ export default function Dashboard() {
                     لا توجد فئات متاحة حاليًا.
                   </p>
                 )}
-                <div className="grid max-h-48 grid-cols-2 gap-2 overflow-y-auto">
+                <div className="grid max-h-28 grid-cols-2 gap-1.5 overflow-y-auto">
                   {categoryProducts.map((item) => (
                     <button
                       key={item._id}
                       type="button"
                       onClick={() => chooseMenuItem(item)}
-                      className={`rounded-lg border px-2 py-2 text-right text-xs transition ${
+                      className={`rounded-lg border px-2 py-1.5 text-right text-xs transition ${
                         selectedProductId === item._id
                           ? 'border-brand-orange bg-brand-orange/15 text-brand-orange'
                           : 'border-white/10 bg-white/5 text-gray-200 hover:border-brand-orange'
@@ -521,39 +595,35 @@ export default function Dashboard() {
                     لا توجد أصناف نشطة في هذه الفئة.
                   </p>
                 )}
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-[0.7fr_1fr_auto] gap-1.5">
                   <input
                     type="number"
                     min="1"
-                    className="input text-sm sm:text-base"
+                    className="input !px-2 !py-1.5 text-sm"
                     value={selectedQuantity}
                     onChange={(e) => setSelectedQuantity(e.target.value)}
                     placeholder="الكمية"
                   />
-                  <div className="flex items-center justify-between rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 text-sm">
-                    <span className="text-gray-300">السعر</span>
+                  <div className="flex items-center justify-center rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-2 text-xs">
                     <strong className="text-emerald-300">
                       {selectedProductId ? `${Number(selectedProductPrice || 0).toFixed(2)} ج.م` : '—'}
                     </strong>
                   </div>
+                  <button
+                    type="button"
+                    onClick={addItemToOrder}
+                    className="btn-secondary whitespace-nowrap px-3 py-1.5 text-xs"
+                  >
+                    إضافة
+                  </button>
                 </div>
-              </div>
-
-              <div className="grid grid-cols-1">
-                <button
-                  type="button"
-                  onClick={addItemToOrder}
-                  className="btn-secondary w-full text-sm sm:text-base py-2 sm:py-3"
-                >
-                  إضافة المنتج للطلب
-                </button>
-              </div>
+              </section>
 
               {/* Order Items */}
               {orderForm.items.length > 0 && (
-                <div className="bg-gray-700 p-3 sm:p-4 rounded-lg animate-slideInRtl">
-                  <p className="text-xs sm:text-sm font-semibold mb-2 sm:mb-3">المنتجات المضافة ({orderForm.items.length})</p>
-                  <div className="space-y-2 max-h-32 sm:max-h-40 overflow-y-auto">
+                <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-2.5 animate-slideInRtl">
+                  <p className="mb-2 text-xs font-semibold">المنتجات المضافة ({orderForm.items.length})</p>
+                  <div className="max-h-24 space-y-1.5 overflow-y-auto">
                     {orderForm.items.map((item) => (
                       <div key={item.product_id || item.client_item_id} className="flex justify-between items-center bg-gray-600 p-2 sm:p-3 rounded text-xs sm:text-sm hover:bg-gray-500 transition">
                         <span>{item.product_name} × {item.quantity}</span>
@@ -573,12 +643,13 @@ export default function Dashboard() {
                 </div>
               )}
 
-              {/* Type and delivery fields */}
-              <div className="grid grid-cols-2 gap-2 sm:gap-3">
+              <section className="rounded-xl border border-white/10 bg-white/[0.03] p-2.5">
+                <h3 className="mb-2 text-xs font-bold text-brand-orange">تفاصيل الطلب</h3>
+                <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="block text-xs font-semibold mb-1">نوع الطلب</label>
                   <select
-                    className="input text-xs sm:text-sm"
+                    className="input !px-3 !py-2 text-sm"
                     value={orderForm.type}
                     onChange={(e) => setOrderForm({ ...orderForm, type: e.target.value })}
                   >
@@ -586,70 +657,109 @@ export default function Dashboard() {
                     <option value="delivery">توصيل</option>
                   </select>
                 </div>
-                <div className="flex items-end text-xs text-gray-400">
-                  {orderForm.type === 'delivery' ? 'سيتم إضافة رسوم التوصيل' : 'استلام من المطعم'}
-                </div>
-              </div>
 
               {orderForm.type === 'delivery' && (
-                <div className="space-y-2">
-                  <label className="block text-xs font-semibold">عنوان التوصيل</label>
+                <div className="col-span-2 grid grid-cols-2 gap-2">
+                  <label className="col-span-2 block text-xs font-semibold">عنوان التوصيل *</label>
                   <input
                     type="text"
-                    className="input text-sm"
+                    className="input !px-3 !py-2 text-sm"
                     value={orderForm.customer_address}
                     onChange={(e) => setOrderForm({ ...orderForm, customer_address: e.target.value })}
                     placeholder="عنوان التوصيل"
+                    required
                   />
                   <input
                     type="number"
                     min="0"
-                    className="input text-sm w-32 mt-2"
+                    className="input !px-3 !py-2 text-sm"
                     placeholder="رسوم التوصيل"
                     value={orderForm.delivery_fee}
                     onChange={(e) => setOrderForm({ ...orderForm, delivery_fee: e.target.value === '' ? '' : (parseFloat(e.target.value) || 0) })}
                   />
                 </div>
               )}
+                </div>
+              </section>
 
               {/* Discount & Tax */}
-              <div className="grid grid-cols-2 gap-2 sm:gap-3">
+              <section className="rounded-xl border border-white/10 bg-white/[0.03] p-2.5">
+                <div className="grid grid-cols-2 gap-2 sm:gap-3">
                 <div>
-                  <label className="block text-xs font-semibold mb-1">الخصم</label>
+                  <label className="block text-xs font-semibold mb-1">الخصم (%)</label>
                   <input
                     type="number"
-                    className="input text-xs sm:text-sm py-2"
+                    className="input !px-3 !py-1.5 text-sm"
                     value={orderForm.discount}
                     onChange={(e) => setOrderForm({ ...orderForm, discount: parseFloat(e.target.value) || 0 })}
                     min="0"
+                    max="100"
+                    step="0.1"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold mb-1">الضريبة</label>
+                  <label className="block text-xs font-semibold mb-1">الضريبة من الإعدادات (%)</label>
                   <input
                     type="number"
-                    className="input text-xs sm:text-sm py-2"
+                    className="input !px-3 !py-1.5 text-sm opacity-70"
                     value={orderForm.tax}
-                    onChange={(e) => setOrderForm({ ...orderForm, tax: parseFloat(e.target.value) || 0 })}
-                    min="0"
+                    readOnly
+                  />
+                </div>
+              </div>
+                <div className="mt-2 grid grid-cols-2 gap-1.5 text-[11px]">
+                  <div className="rounded bg-gray-800 p-1.5">
+                    <span className="text-gray-400">الإجمالي الفرعي:</span>
+                    <p className="font-bold text-accent">{orderTotals.subtotal.toFixed(2)} ج.م</p>
+                  </div>
+                  <div className="rounded bg-gray-800 p-1.5">
+                    <span className="text-gray-400">قيمة الخصم:</span>
+                    <p className="font-bold text-green-400">-{orderTotals.discount.toFixed(2)} ج.م</p>
+                  </div>
+                  <div className="rounded bg-gray-800 p-1.5">
+                    <span className="text-gray-400">قيمة الضريبة:</span>
+                    <p className="font-bold text-yellow-500">+{orderTotals.tax.toFixed(2)} ج.م</p>
+                  </div>
+                  {orderForm.type === 'delivery' && (
+                    <div className="rounded bg-gray-800 p-1.5">
+                      <span className="text-gray-400">رسوم التوصيل:</span>
+                      <p className="font-bold text-blue-300">+{orderTotals.delivery.toFixed(2)} ج.م</p>
+                    </div>
+                  )}
+                </div>
+              </section>
+
+              <div className="grid grid-cols-2 items-start gap-2">
+                <PaymentMethodField
+                  value={orderForm.payment_method}
+                  onChange={(payment_method) => setOrderForm((current) => ({ ...current, payment_method }))}
+                />
+                <div>
+                  <label className="mb-1 block text-xs font-semibold">ملاحظات</label>
+                  <textarea
+                    className="input !px-3 !py-2 text-sm"
+                    value={orderForm.notes}
+                    onChange={(e) => setOrderForm({ ...orderForm, notes: e.target.value })}
+                    placeholder="ملاحظات الطلب"
+                    rows="2"
                   />
                 </div>
               </div>
 
               {/* Total */}
-              <div className="bg-accent bg-opacity-20 p-3 sm:p-4 rounded-lg border-2 border-accent animate-pulse">
-                <p className="text-xs sm:text-sm text-gray-300">الإجمالي</p>
-                <p className="text-2xl sm:text-3xl font-bold text-accent">{calculateTotal().toFixed(2)} ج.م</p>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="rounded-lg border border-accent bg-accent bg-opacity-20 p-2.5">
+                  <p className="text-xs text-gray-300">الإجمالي</p>
+                  <p className="text-xl font-bold text-accent">{calculateTotal().toFixed(2)} ج.م</p>
+                </div>
+                <button
+                  type="submit"
+                  className="btn-primary w-full px-3 py-2 text-sm"
+                  disabled={createMutation.isLoading}
+                >
+                  {createMutation.isLoading ? '⏳ جاري التأكيد...' : '✓ تأكيد الطلب'}
+                </button>
               </div>
-
-              {/* Submit */}
-              <button
-                type="submit"
-                className="btn-primary w-full text-sm sm:text-base lg:text-lg"
-                disabled={createMutation.isLoading}
-              >
-                {createMutation.isLoading ? '⏳ جاري الحفظ...' : '✓ حفظ الطلب'}
-              </button>
             </form>
           </div>
         </div>

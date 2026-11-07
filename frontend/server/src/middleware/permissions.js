@@ -65,6 +65,10 @@ const permissionsMap = {
     'create_orders',
     'edit_orders',
     'delete_orders',
+    'view_customers',
+    'create_customers',
+    'edit_customers',
+    'delete_customers',
     'view_categories',
     'edit_categories',
     'view_recipes',
@@ -81,6 +85,7 @@ const permissionsMap = {
     'view_ingredients',
     'view_products',
     'view_orders',
+    'view_customers',
     'view_categories',
     'view_recipes',
     'view_production'

@@ -1,6 +1,6 @@
 import React, { useState, useContext, useCallback, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from 'react-query';
-import { ordersAPI, productsAPI, categoriesAPI } from '../api';
+import { ordersAPI, productsAPI, categoriesAPI, customersAPI, isDemoMode } from '../api';
 import { Plus, Trash2, Check, X, Search, ExternalLink } from 'lucide-react';
 import Modal from '../components/Modal';
 import Toast from '../components/Toast';
@@ -8,6 +8,9 @@ import LoadingSkeleton from '../components/LoadingSkeleton';
 import { LanguageContext } from '../contexts/LanguageContext';
 import { AuthContext } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
+import { calculateOrderTotals, getDefaultDeliveryFee, getPaymentMethodLabel, getStoredCustomers, getTaxRate, normalizePhone, saveOrderCustomer } from '../utils/orderHelpers';
+import { printInvoice } from '../utils/printInvoice';
+import PaymentMethodField from '../components/PaymentMethodField';
 
 const ORDER_CATEGORY_NAMES = [
   {
@@ -94,6 +97,7 @@ export default function Orders() {
   
   const queryClient = useQueryClient();
   const createRequestInFlight = useRef(false);
+  const pendingInvoiceWindow = useRef(null);
   const idempotencyState = useRef({ fingerprint: '', key: '' });
   const getIdempotencyKey = (payload) => {
     const fingerprint = JSON.stringify(payload);
@@ -109,6 +113,18 @@ export default function Orders() {
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [toast, setToast] = useState(null);
+  const [customers, setCustomers] = useState(getStoredCustomers);
+  useQuery('customers', async () => {
+    if (isDemoMode) return getStoredCustomers();
+    const response = await customersAPI.getAll();
+    return Array.isArray(response.data) ? response.data : [];
+  }, {
+    onSuccess: (savedCustomers) => setCustomers(savedCustomers),
+    onError: (error) => {
+      console.error('[Orders] Failed to load customers:', error);
+      setToast({ type: 'error', message: 'تعذر تحميل العملاء المحفوظين' });
+    },
+  });
 
   // الـ STATE الأساسي للفورم
   const [orderForm, setOrderForm] = useState({
@@ -151,29 +167,30 @@ export default function Orders() {
     product_id: '',
     quantity: 1,
     discount: 0,
-    tax: 14,
+    tax: getTaxRate(),
     type: 'takeaway',
     customer_address: '',
     delivery_fee: ''
   });
 
   // حالة الضريبة من الإعدادات
-  const [taxRate, setTaxRate] = useState(() => {
-    const settings = localStorage.getItem('appSettings');
-    if (settings) {
-      return JSON.parse(settings).taxRate || 14;
-    }
-    return 14;
-  });
+  const [taxRate, setTaxRate] = useState(getTaxRate);
+
+  useEffect(() => {
+    if (!isDemoMode) return undefined;
+    const refreshCustomers = () => setCustomers(getStoredCustomers());
+    window.addEventListener('customersUpdated', refreshCustomers);
+    window.addEventListener('storage', refreshCustomers);
+    return () => {
+      window.removeEventListener('customersUpdated', refreshCustomers);
+      window.removeEventListener('storage', refreshCustomers);
+    };
+  }, []);
 
   // ============ EFFECT - تحديث الضريبة عند تغيير الإعدادات ============
   useEffect(() => {
     const handleStorageChange = () => {
-      const settings = localStorage.getItem('appSettings');
-      if (settings) {
-        setTaxRate(JSON.parse(settings).taxRate || 14);
-      }
-
+      setTaxRate(getTaxRate());
     };
     
     // استمع إلى الحدث المخصص من Settings
@@ -222,16 +239,27 @@ export default function Orders() {
       const p = products.find(x => x._id === quickOrder.product_id);
       const price = p ? (p.price || 0) : 0;
       const subtotal = price * (quickOrder.quantity || 1);
-      const afterDiscount = subtotal - (quickOrder.discount || 0);
-      const taxAmount = afterDiscount * ((quickOrder.tax || 0) / 100);
-      const delivery = quickOrder.type === 'delivery' ? ((quickOrder.delivery_fee === '' || quickOrder.delivery_fee === null || typeof quickOrder.delivery_fee === 'undefined') ? (JSON.parse(localStorage.getItem('appSettings')||'{}').deliveryFeeDefault || 0) : Number(quickOrder.delivery_fee)) : 0;
+      const discountPercent = Number(quickOrder.discount) || 0;
+      if (!Number.isFinite(discountPercent) || discountPercent < 0 || discountPercent > 100) {
+        setToast({ type: 'warning', message: 'نسبة الخصم يجب أن تكون بين 0 و100%' });
+        return;
+      }
+      const delivery = quickOrder.type === 'delivery'
+        ? Number(quickOrder.delivery_fee === '' ? getDefaultDeliveryFee() : quickOrder.delivery_fee)
+        : 0;
+      const totals = calculateOrderTotals(
+        [{ price, quantity: quickOrder.quantity || 1 }],
+        discountPercent,
+        quickOrder.tax,
+        delivery
+      );
 
       const payload = {
         customer_name: quickOrder.customer_name,
         customer_phone: quickOrder.customer_phone,
         items: [{ product_id: quickOrder.product_id, quantity: quickOrder.quantity }],
-        discount: quickOrder.discount || 0,
-        tax: taxAmount,
+        discount: totals.discount,
+        tax: totals.tax,
         type: quickOrder.type || 'takeaway',
         customer_address: quickOrder.customer_address || '',
         delivery_fee: delivery,
@@ -348,7 +376,7 @@ export default function Orders() {
   // ============ MUTATIONS ============
 
   // Print helper (used for auto-print on completion and by Receipt component)
-  const printOrder = (rawOrder, mode = 'full') => {
+  const legacyPrintOrder = (rawOrder, mode = 'full') => {
     try {
       if (!rawOrder) return;
       const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (character) => ({
@@ -475,6 +503,10 @@ export default function Orders() {
     }
   };
 
+  const printOrder = (rawOrder, mode = 'full', targetWindow = null) => {
+    printInvoice(rawOrder, targetWindow);
+  };
+
   const createMutation = useMutation(
     (data) => {
       const { _source, ...orderData } = data;
@@ -483,7 +515,38 @@ export default function Orders() {
     {
       onSuccess: (response, variables) => {
         idempotencyState.current = { fingerprint: '', key: '' };
-        setToast({ type: 'success', message: currentLabels.createSuccess });
+        let customerSaveFailed = false;
+        let loyaltyResult = null;
+        if (isDemoMode) {
+          try {
+            loyaltyResult = saveOrderCustomer(response.data || variables);
+            setCustomers(getStoredCustomers());
+          } catch (error) {
+            console.error('[Orders] Failed to save demo customer details:', error);
+            customerSaveFailed = true;
+          }
+        } else {
+          const savedCustomer = response.data?.customerId;
+          loyaltyResult = {
+            pointsEarned: Boolean(response.data?.loyaltyPointsAwarded),
+            pointsBalance: Number(savedCustomer?.loyaltyPoints) || 0,
+          };
+          queryClient.invalidateQueries('customers');
+        }
+        const invoiceOpened = response.data
+          ? printOrder(response.data, 'full', pendingInvoiceWindow.current)
+          : false;
+        pendingInvoiceWindow.current = null;
+        setToast({
+          type: customerSaveFailed || (response.data && !invoiceOpened) ? 'warning' : 'success',
+          message: customerSaveFailed
+            ? 'تم إنشاء الطلب لكن تعذر حفظ بيانات العميل'
+            : response.data && !invoiceOpened
+              ? 'تم إنشاء الطلب لكن تعذر فتح الفاتورة. اسمح بالنوافذ المنبثقة ثم أعد المحاولة من قسم الطلبات'
+            : loyaltyResult?.pointsEarned
+              ? `تم إنشاء الطلب وإضافة نقطة ولاء للعميل. رصيده الآن ${loyaltyResult.pointsBalance} نقطة`
+              : 'تم إنشاء الطلب؛ لم تُضف نقطة ولاء لعدم تسجيل رقم هاتف العميل',
+        });
         queryClient.invalidateQueries('orders');
         if (canCreateOrders && variables._source !== 'quick' && response.data) {
           setSelectedOrder(response.data);
@@ -502,6 +565,10 @@ export default function Orders() {
         }
       },
       onError: (error) => {
+        if (pendingInvoiceWindow.current && !pendingInvoiceWindow.current.closed) {
+          pendingInvoiceWindow.current.close();
+        }
+        pendingInvoiceWindow.current = null;
         let errorMsg = currentLabels.createError;
         
         if (error?.response?.data?.error) {
@@ -571,15 +638,6 @@ export default function Orders() {
   );
 
   // ============ HELPER FUNCTIONS ============
-
-  // دالة توليد order_number تلقائياً
-  const generateOrderNumber = useCallback(() => {
-    const timestamp = Date.now();
-    const random = Math.floor(Math.random() * 1000);
-    const orderNum = `ORD-${timestamp}-${random}`;
-    console.log('[OrderNumber] Generated:', orderNum);
-    return orderNum;
-  }, []);
 
   const resetForm = useCallback(() => {
     console.log('[Order] Resetting form');
@@ -677,134 +735,12 @@ export default function Orders() {
   }, []);
 
   const calculateTotal = useCallback(() => {
-    const subtotal = orderForm.items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-    const discountAmount = orderForm.discount || 0;
-    const afterDiscount = subtotal - discountAmount;
-    const tax = afterDiscount * (taxRate / 100);
-
     // Determine delivery fee: use entered value; if empty and type is delivery use settings default; otherwise 0
-    let delivery = 0;
-    if (orderForm.type === 'delivery') {
-      if (orderForm.delivery_fee === '' || orderForm.delivery_fee === null || typeof orderForm.delivery_fee === 'undefined') {
-        const settings = JSON.parse(localStorage.getItem('appSettings') || '{}');
-        delivery = settings.deliveryFeeDefault || 0;
-      } else {
-        delivery = parseFloat(orderForm.delivery_fee) || 0;
-      }
-    } else {
-      delivery = parseFloat(orderForm.delivery_fee) || 0;
-    }
-
-    const total = afterDiscount + tax + delivery;
-    console.log('[Calculate] Subtotal:', subtotal, 'Discount:', discountAmount, 'Tax Rate:', taxRate, 'Tax:', tax, 'Delivery:', delivery, 'Total:', total);
-    return total;
+    const delivery = orderForm.type === 'delivery'
+      ? (orderForm.delivery_fee === '' ? getDefaultDeliveryFee() : orderForm.delivery_fee)
+      : 0;
+    return calculateOrderTotals(orderForm.items, orderForm.discount, taxRate, delivery).total;
   }, [orderForm.items, orderForm.discount, orderForm.delivery_fee, orderForm.type, taxRate]);
-
-  // دالة إرسال الفورم - تتحقق من الـ items وتضيف order_number
-  const handleSubmitOrder = useCallback((e) => {
-    e.preventDefault();
-    console.log('========== FORM SUBMISSION START ==========');
-    
-    // دالة لقراءة الـ orderForm من الـ state الحالي
-    setOrderForm(currentForm => {
-      try {
-        console.log('[Submit] Current orderForm:', currentForm);
-        console.log('[Submit] Items count:', currentForm.items?.length || 0);
-        console.log('[Submit] Items:', currentForm.items);
-
-        // التحقق من البيانات
-        const errors = [];
-
-        if (!currentForm.customer_name?.trim()) {
-          console.error('[Submit] Missing customer_name');
-          errors.push('اسم العميل مطلوب');
-        }
-
-        if (currentForm.type === 'delivery' && !currentForm.customer_address?.trim()) {
-          console.error('[Submit] Missing delivery address for delivery order');
-          errors.push('عنوان التوصيل مطلوب');
-        }
-
-        if (!currentForm.items || currentForm.items.length === 0) {
-          console.error('[Submit] No items in order!');
-          errors.push('يجب إضافة منتج واحد على الأقل');
-        }
-
-        if (errors.length > 0) {
-          console.error('[Submit] Validation errors:', errors);
-          setToast({ 
-            type: 'warning', 
-            message: errors.join(' | ')
-          });
-          console.log('========== FORM SUBMISSION FAILED ==========');
-          return currentForm; // إرجع الـ state بدون تغيير
-        }
-
-        console.log('[Submit] ✓ All validations passed');
-
-        // توليد order_number وإضافتها للبيانات
-        console.log('[Submit] Calling generateOrderNumber...');
-        const orderNumber = generateOrderNumber();
-        console.log('[Submit] Generated order_number:', orderNumber);
-
-        const subtotal = currentForm.items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-        const discountAmount = currentForm.discount || 0;
-        const afterDiscount = subtotal - discountAmount;
-        const taxAmount = afterDiscount * (taxRate / 100);
-        const totalAmount = afterDiscount + taxAmount + (currentForm.delivery_fee || 0);
-
-        // Ensure order_number is set
-        if (!orderNumber) {
-          throw new Error('Failed to generate order number');
-        }
-
-        const orderDataToSend = {
-          customer_name: currentForm.customer_name,
-          customer_phone: currentForm.customer_phone,
-          items: currentForm.items,
-          discount: discountAmount,
-          tax: taxAmount,
-          type: currentForm.type || 'takeaway',
-          total: totalAmount,
-          tax_rate: taxRate,
-          payment_method: currentForm.payment_method,
-          notes: currentForm.notes,
-          subtotal: subtotal,
-          order_number: orderNumber,
-        };
-
-        // Compute delivery fee: use entered value, or appSettings default if delivery and empty
-        const settings = JSON.parse(localStorage.getItem('appSettings') || '{}');
-        if ((currentForm.delivery_fee === '' || typeof currentForm.delivery_fee === 'undefined') && currentForm.type === 'delivery') {
-          if (typeof settings.deliveryFeeDefault !== 'undefined') {
-            orderDataToSend.delivery_fee = settings.deliveryFeeDefault;
-          }
-          // else omit to let server apply its default
-        } else if (currentForm.delivery_fee !== '') {
-          orderDataToSend.delivery_fee = parseFloat(currentForm.delivery_fee) || 0;
-        }
-        console.log('[Submit] ✓ Built orderDataToSend');
-        console.log('[Submit] orderDataToSend keys:', Object.keys(orderDataToSend));
-        console.log('[Submit] About to call createMutation.mutate');
-        console.log('========== SENDING TO API ==========');
-
-        // تأكيد من البيانات قبل الإرسال
-        if (!orderDataToSend.order_number) {
-          console.error('[Submit] CRITICAL: order_number is missing!');
-          setToast({ type: 'error', message: 'خطأ: رقم الطلب غير موجود' });
-          return currentForm;
-        }
-
-        createMutation.mutate(orderDataToSend);
-        
-        return currentForm; // إرجع الـ state بدون تغيير
-      } catch (err) {
-        console.error('[Submit] Exception in handleSubmitOrder:', err);
-        setToast({ type: 'error', message: 'خطأ في معالجة الطلب: ' + err.message });
-        return currentForm;
-      }
-    });
-  }, [createMutation, generateOrderNumber]);
 
   const submitOrder = useCallback((event) => {
     event.preventDefault();
@@ -818,31 +754,29 @@ export default function Orders() {
       setToast({ type: 'warning', message: 'عنوان التوصيل مطلوب' });
       return;
     }
-    const subtotal = orderForm.items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-    const discount = Number(orderForm.discount || 0);
-    if (!Number.isFinite(discount) || discount < 0 || discount > subtotal) {
-      setToast({ type: 'warning', message: 'الخصم يجب أن يكون بين صفر وإجمالي المنتجات' });
+    const discountPercent = Number(orderForm.discount || 0);
+    if (!Number.isFinite(discountPercent) || discountPercent < 0 || discountPercent > 100) {
+      setToast({ type: 'warning', message: 'نسبة الخصم يجب أن تكون بين 0 و100%' });
       return;
     }
-    const discountedSubtotal = subtotal - discount;
-    const tax = discountedSubtotal * (taxRate / 100);
-    const settings = JSON.parse(localStorage.getItem('appSettings') || '{}');
     const deliveryFee = orderForm.type === 'delivery'
-      ? Number(orderForm.delivery_fee === '' ? settings.deliveryFeeDefault || 0 : orderForm.delivery_fee)
+      ? Number(orderForm.delivery_fee === '' ? getDefaultDeliveryFee() : orderForm.delivery_fee)
       : 0;
     if (!Number.isFinite(deliveryFee) || deliveryFee < 0) {
       setToast({ type: 'warning', message: 'رسوم التوصيل غير صحيحة' });
       return;
     }
+    const totals = calculateOrderTotals(orderForm.items, discountPercent, taxRate, deliveryFee);
 
     createRequestInFlight.current = true;
+    pendingInvoiceWindow.current = window.open('', '_blank', 'popup,width=420,height=720');
     createMutation.mutate({
       customer_name: orderForm.customer_name.trim(),
       customer_phone: orderForm.customer_phone || '',
       customer_address: orderForm.customer_address || '',
       items: orderForm.items,
-      discount,
-      tax,
+      discount: totals.discount,
+      tax: totals.tax,
       payment_method: orderForm.payment_method || 'cash',
       notes: orderForm.notes || '',
       type: orderForm.type || 'takeaway',
@@ -979,6 +913,29 @@ export default function Orders() {
           <section className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
             <h3 className="mb-3 text-sm font-bold text-brand-orange">بيانات العميل</h3>
             <div className="grid gap-3 sm:grid-cols-2">
+            <div className="sm:col-span-2">
+              <label className="block text-xs font-medium mb-1">اختيار عميل محفوظ</label>
+              <select
+                className="input text-sm"
+                value={customers.find((customer) => normalizePhone(customer.phone) === normalizePhone(orderForm.customer_phone))?._id || customers.find((customer) => normalizePhone(customer.phone) === normalizePhone(orderForm.customer_phone))?.id || ''}
+                onChange={(e) => {
+                  const customer = customers.find((item) => (item._id || item.id) === e.target.value);
+                  if (customer) {
+                    setOrderForm((current) => ({
+                      ...current,
+                      customer_name: customer.name || '',
+                      customer_phone: customer.phone || '',
+                      customer_address: customer.address || '',
+                    }));
+                  }
+                }}
+              >
+                <option value="">عميل جديد</option>
+                {customers.map((customer) => (
+                  <option key={customer._id || customer.id} value={customer._id || customer.id}>{customer.name} — {customer.phone}</option>
+                ))}
+              </select>
+            </div>
             <div>
               <label className="block text-xs font-medium mb-1">اسم العميل *</label>
               <input
@@ -1181,16 +1138,18 @@ export default function Orders() {
           {/* Discounts and Taxes */}
           <section className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
             <div>
-              <label className="block text-xs font-medium mb-1">الخصم (بالقيمة) ج.م</label>
+              <label className="block text-xs font-medium mb-1">الخصم (%)</label>
               <input
                 type="number"
                 className="input text-sm"
                 value={orderForm.discount}
                 onChange={(e) => setOrderForm({ ...orderForm, discount: parseFloat(e.target.value) || 0 })}
                 min="0"
+                max="100"
+                step="0.1"
                 placeholder="0"
               />
-              <p className="text-xs text-gray-400 mt-1">معدل الضريبة المطبق: {taxRate}% (من الإعدادات)</p>
+              <p className="text-xs text-gray-400 mt-1">معدل الضريبة من الإعدادات: {taxRate}%</p>
             </div>
             <div className="grid grid-cols-2 gap-2 text-xs">
               <div className="bg-gray-800 p-2 rounded">
@@ -1199,24 +1158,15 @@ export default function Orders() {
               </div>
               <div className="bg-gray-800 p-2 rounded">
                 <span className="text-gray-400">الضريبة ({taxRate}%):</span>
-                <p className="font-bold text-yellow-500">{((orderForm.items.reduce((sum, item) => sum + (item.price * item.quantity), 0) - (orderForm.discount || 0)) * (taxRate / 100)).toFixed(2)} ج.م</p>
+                <p className="font-bold text-yellow-500">{((orderForm.items.reduce((sum, item) => sum + (item.price * item.quantity), 0) * (1 - (Number(orderForm.discount) || 0) / 100)) * (taxRate / 100)).toFixed(2)} ج.م</p>
               </div>
             </div>
           </section>
 
-          {/* Payment Method */}
-          <div>
-            <label className="block text-xs font-medium mb-1">طريقة الدفع</label>
-            <select
-              className="input text-sm"
-              value={orderForm.payment_method}
-              onChange={(e) => setOrderForm({ ...orderForm, payment_method: e.target.value })}
-            >
-              <option value="cash">نقد</option>
-              <option value="card">كارت</option>
-              <option value="other">أخرى</option>
-            </select>
-          </div>
+          <PaymentMethodField
+            value={orderForm.payment_method}
+            onChange={(payment_method) => setOrderForm((current) => ({ ...current, payment_method }))}
+          />
 
           {/* Notes */}
           <div>
@@ -1242,7 +1192,7 @@ export default function Orders() {
             className="btn-primary sticky bottom-0 w-full py-3 text-base shadow-lg"
             disabled={createMutation.isLoading}
           >
-            {createMutation.isLoading ? 'جاري الحفظ...' : 'حفظ الطلب'}
+            {createMutation.isLoading ? 'جاري التأكيد...' : 'تأكيد الطلب'}
           </button>
         </form>
       </Modal>
@@ -1332,6 +1282,10 @@ function Receipt({ order, onStatusUpdate, updateStatusMutation, queryClient, set
           <p className="font-bold text-white mt-1">{order.customer_phone || '-'}</p>
         </div>
         <div className="border-l-2 border-amber-500 pl-2">
+          <p className="text-gray-400 text-xs uppercase tracking-wide">العنوان</p>
+          <p className="font-bold text-white mt-1">{order.customer_address || '-'}</p>
+        </div>
+        <div className="border-l-2 border-amber-500 pl-2">
           <p className="text-gray-400 text-xs uppercase tracking-wide">التاريخ</p>
           <p className="font-bold text-white mt-1">{createdDate ? createdDate.toLocaleDateString('ar-SA') : '-'}</p>
         </div>
@@ -1387,7 +1341,7 @@ function Receipt({ order, onStatusUpdate, updateStatusMutation, queryClient, set
         )}
         {order.tax > 0 && (
           <div className="flex justify-between text-sm text-orange-400 border-t border-orange-900 pt-2">
-            <span>الضريبة (14%):</span>
+            <span>الضريبة:</span>
             <span className="font-bold">+{order.tax.toFixed(2)} ج.م</span>
           </div>
         )}
@@ -1410,7 +1364,7 @@ function Receipt({ order, onStatusUpdate, updateStatusMutation, queryClient, set
       <div className="grid grid-cols-2 gap-3 text-xs bg-gray-800/50 p-3 rounded-lg">
         <div className="border-l-2 border-green-500 pl-2">
           <p className="text-gray-400 uppercase tracking-wide">طريقة الدفع</p>
-          <p className="font-bold text-white mt-1">{order.payment_method === 'cash' ? '💵 نقد' : order.payment_method === 'card' ? '💳 كارت' : '📱 أخرى'}</p>
+          <p className="font-bold text-white mt-1">{getPaymentMethodLabel(order.payment_method)}</p>
         </div>
         <div className="border-l-2 border-blue-500 pl-2">
           <p className="text-gray-400 uppercase tracking-wide">حالة الطلب</p>
@@ -1439,9 +1393,10 @@ function Receipt({ order, onStatusUpdate, updateStatusMutation, queryClient, set
           </button>
         )}
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div className="flex justify-center">
           <button
             onClick={() => {
+              return printOrder(order, 'full');
               const printWindow = window.open('', '', 'height=600,width=900');
               printWindow.document.write(`
                 <!DOCTYPE html>
@@ -1616,7 +1571,7 @@ function Receipt({ order, onStatusUpdate, updateStatusMutation, queryClient, set
                       ` : ''}
                       ${order.tax > 0 ? `
                         <div class="total-row tax">
-                          <span>الضريبة (14%):</span>
+                        <span>الضريبة:</span>
                           <span>+ ${(order.tax || 0).toFixed(2)} ج.م</span>
                         </div>
                       ` : ''}
@@ -1639,15 +1594,9 @@ function Receipt({ order, onStatusUpdate, updateStatusMutation, queryClient, set
               printWindow.document.close();
               setTimeout(() => printOrder(order, 'full'), 50);
             }}
-            className="bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white font-bold py-2 px-3 rounded-lg flex items-center justify-center gap-2 transition transform hover:scale-105"
+            className="w-full max-w-sm bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white font-bold py-2 px-3 rounded-lg flex items-center justify-center gap-2 transition transform hover:scale-105"
           >
-            🖨️ طباعة كاملة
-          </button>
-          <button
-            onClick={() => printOrder(order, 'quick') }
-            className="bg-gradient-to-r from-purple-600 to-purple-700 hover:from-purple-700 hover:to-purple-800 text-white font-bold py-2 px-3 rounded-lg flex items-center justify-center gap-2 transition transform hover:scale-105"
-          >
-            📄 طباعة سريعة
+            🖨️ طباعة الريسيت
           </button>
         </div>
       </div>

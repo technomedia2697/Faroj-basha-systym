@@ -19,6 +19,20 @@ const OrderSchema = new mongoose.Schema(
       type: String,
       default: '',
     },
+    customer_phone_normalized: {
+      type: String,
+      default: '',
+      index: true,
+    },
+    customerId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Customer',
+      default: null,
+    },
+    loyaltyPointsAwarded: {
+      type: Boolean,
+      default: false,
+    },
     customer_address: {
       type: String,
       default: '',
@@ -64,7 +78,8 @@ const OrderSchema = new mongoose.Schema(
     },
     payment_method: {
       type: String,
-      enum: ['cash', 'card', 'other'],
+      trim: true,
+      maxlength: 80,
       default: 'cash',
     },
     type: {

@@ -11,6 +11,7 @@ import stockMovementsRoutes from './routes/stockMovements.js';
 import dashboardRoutes from './routes/dashboard.js';
 import reportsRoutes from './routes/reports.js';
 import ordersRoutes from './routes/orders.js';
+import customersRoutes from './routes/customers.js';
 import { verifyToken } from './middleware/auth.js';
 import { requireRole } from './middleware/permissions.js';
 
@@ -75,6 +76,7 @@ app.use('/api/recipes', verifyToken, requireRole('admin'), recipesRoutes);
 app.use('/api/production', verifyToken, requireRole('admin'), productionRoutes);
 app.use('/api/stock-movements', verifyToken, requireRole('admin'), stockMovementsRoutes);
 app.use('/api/orders', ordersRoutes);
+app.use('/api/customers', customersRoutes);
 app.use('/api/dashboard', verifyToken, requireRole('admin'), dashboardRoutes);
 app.use('/api/reports', verifyToken, requireRole('admin'), reportsRoutes);
 
