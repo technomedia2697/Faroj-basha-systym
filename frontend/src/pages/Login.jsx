@@ -51,6 +51,14 @@ export default function Login() {
   const currentLabels = labels[language];
   const demoMode = import.meta.env.DEV && import.meta.env.VITE_DEMO_MODE !== 'false';
 
+  const getLoginErrorMessage = (err) => {
+    const apiError = err.response?.data?.error;
+    if (typeof apiError === 'string') return apiError;
+    if (apiError && typeof apiError.message === 'string') return apiError.message;
+    if (typeof err.message === 'string') return err.message;
+    return currentLabels.connectionFailed;
+  };
+
   const handleLogin = async (e) => {
     e.preventDefault();
     setError('');
@@ -64,7 +72,7 @@ export default function Login() {
       setUser(data.user);
       navigate('/dashboard');
     } catch (err) {
-      setError(err.response?.data?.error || err.message || currentLabels.connectionFailed);
+      setError(getLoginErrorMessage(err));
     } finally {
       setLoading(false);
     }
