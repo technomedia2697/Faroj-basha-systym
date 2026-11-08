@@ -270,6 +270,7 @@ export default function Orders() {
 
       payload.idempotency_key = getIdempotencyKey(payload);
       createRequestInFlight.current = true;
+      pendingInvoiceWindow.current = window.open('', '_blank');
       createMutation.mutate(payload);
 
     } catch (err) {
@@ -617,13 +618,19 @@ export default function Orders() {
         try {
           const completedOrder = response?.data;
           if (completedOrder) {
-            printOrder(completedOrder, 'full');
+            printOrder(completedOrder, 'full', pendingInvoiceWindow.current);
           }
         } catch (e) {
           console.error('[Orders] Failed to auto-print on completion:', e);
+        } finally {
+          pendingInvoiceWindow.current = null;
         }
       },
       onError: (error) => {
+        if (pendingInvoiceWindow.current && !pendingInvoiceWindow.current.closed) {
+          pendingInvoiceWindow.current.close();
+        }
+        pendingInvoiceWindow.current = null;
         let errorMsg = error?.response?.data?.error || 'خطأ في تحديث حالة الطلب';
         
         // تحسين رسالة الخطأ إذا كانت عن مواد خام ناقصة
@@ -1385,7 +1392,10 @@ function Receipt({ order, onStatusUpdate, updateStatusMutation, queryClient, set
       <div className="space-y-3 pt-2">
         {canConfirm && order.status === 'pending' && (
           <button
-            onClick={() => onStatusUpdate && updateStatusMutation.mutate({ id: order._id, status: 'completed' })}
+              onClick={() => {
+                pendingInvoiceWindow.current = window.open('', '_blank');
+                onStatusUpdate && updateStatusMutation.mutate({ id: order._id, status: 'completed' });
+              }}
             disabled={updateStatusMutation.isLoading}
             className="w-full bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3 px-4 rounded-lg flex items-center justify-center gap-2 transition transform hover:scale-105 shadow-lg"
           >

@@ -35,9 +35,9 @@ function BrandLoadingScreen({ language }) {
         role="img"
         aria-label={language === 'ar' ? 'فروج باشا' : 'Faroj Basha'}
       >
-        <img className="brand-logo-word" src="/5994297452451795077.jpg" alt="" />
-        <img className="brand-logo-moustache" src="/5994297452451795077.jpg" alt="" />
-        <img className="brand-logo-fez" src="/5994297452451795077.jpg" alt="" />
+        <img className="brand-logo-word" src="/brand-word.png" alt="" />
+        <img className="brand-logo-moustache" src="/brand-moustache.png" alt="" />
+        <img className="brand-logo-fez" src="/brand-fez.png" alt="" />
       </div>
       <p className="brand-loading-caption">
         {language === 'ar' ? 'نظام إدارة المخزون' : 'Inventory Management System'}

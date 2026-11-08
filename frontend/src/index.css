@@ -96,10 +96,10 @@ html[lang="ar"] {
 
 @keyframes logoWriteIn {
   from {
-    clip-path: inset(43% 22% 39% 77%);
+    clip-path: inset(0 0 0 100%);
   }
   to {
-    clip-path: inset(43% 22% 39% 22%);
+    clip-path: inset(0);
   }
 }
 
@@ -235,29 +235,22 @@ select {
   width: 100%;
   height: 100%;
   object-fit: contain;
-  mix-blend-mode: screen;
 }
 
 .brand-logo-word {
-  clip-path: inset(43% 22% 39% 77%);
-  animation: logoWriteIn 1.35s cubic-bezier(0.2, 0.75, 0.25, 1) 150ms forwards;
-  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 800 800'%3E%3Crect width='800' height='800' fill='white'/%3E%3Cpath d='M252 365 L248 280 L226 260 Q230 239 251 228 Q293 217 334 222 L383 307 Z' fill='black'/%3E%3C/svg%3E");
-  -webkit-mask-size: 100% 100%;
-  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 800 800'%3E%3Crect width='800' height='800' fill='white'/%3E%3Cpath d='M252 365 L248 280 L226 260 Q230 239 251 228 Q293 217 334 222 L383 307 Z' fill='black'/%3E%3C/svg%3E");
-  mask-size: 100% 100%;
+  clip-path: inset(0 0 0 100%);
+  animation: logoWriteIn 1.7s steps(16, end) 150ms forwards;
 }
 
 .brand-logo-moustache {
-  clip-path: inset(59% 22% 29% 22%);
   opacity: 0;
-  animation: logoSignatureIn 350ms ease 1.25s forwards;
+  animation: logoSignatureIn 350ms ease 1.55s forwards;
 }
 
 .brand-logo-fez {
-  clip-path: inset(28% 51% 49% 26%);
   opacity: 0;
   transform-origin: 50% 100%;
-  animation: fezDropIn 800ms cubic-bezier(0.22, 1, 0.36, 1) 1.35s forwards;
+  animation: fezDropIn 800ms cubic-bezier(0.22, 1, 0.36, 1) 1.7s forwards;
 }
 
 .brand-loading-caption {
@@ -284,7 +277,7 @@ select {
   }
 
   .brand-logo-word {
-    clip-path: inset(43% 22% 39% 22%);
+    clip-path: inset(0);
   }
 
   .brand-logo-moustache,

@@ -54,7 +54,6 @@ export function printInvoice(order, targetWindow) {
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <title>فاتورة ${escapeHtml(order.order_number || '')}</title>
         <style>
-          @page { size: 80mm auto; margin: 3mm; }
           * { box-sizing: border-box; }
           body {
             margin: 0 auto;
@@ -67,10 +66,33 @@ export function printInvoice(order, targetWindow) {
             line-height: 1.55;
           }
           .receipt { background: #fff; padding: 18px; border: 1px solid #e5e7eb; border-radius: 12px; }
-          .toolbar { position: sticky; top: 0; z-index: 1; padding: 0 0 12px; text-align: center; }
-          .print-button {
+          .toolbar {
+            position: sticky; top: 0; z-index: 1; display: flex; flex-wrap: wrap;
+            align-items: center; justify-content: center; gap: 10px; padding: 12px;
+            margin: -16px -16px 16px; background: #fff; border-bottom: 1px solid #e5e7eb;
+          }
+          .toolbar label { display: flex; align-items: center; gap: 8px; font-weight: 700; }
+          .toolbar select, .print-button {
             border: 0; border-radius: 8px; padding: 10px 24px; color: #fff;
-            background: #b51224; font: 700 15px Arial, Tahoma, sans-serif; cursor: pointer;
+            background: #374151; font: 700 14px Arial, Tahoma, sans-serif; cursor: pointer;
+          }
+          .toolbar select { color: #171313; background: #f3f4f6; border: 1px solid #d1d5db; }
+          .print-button { background: #b51224; }
+          .print-hint { flex-basis: 100%; margin: 0; color: #4b5563; text-align: center; font-size: 12px; }
+          @media print {
+            html, body { margin: 0; padding: 0; background: #fff; }
+            body { font-size: 11px; }
+            .receipt { padding: 0; border: 0; border-radius: 0; }
+            .toolbar { display: none !important; }
+            .brand h1 { font-size: 17px; }
+            table { font-size: 10px; }
+            tr, .detail, .total-row { break-inside: avoid; }
+          }
+          @media print {
+            body[data-paper-size="58mm"] { width: 54mm; }
+            body[data-paper-size="80mm"] { width: 74mm; }
+            body[data-paper-size="a4"] { width: 190mm; }
+            body[data-paper-size="printer"] { width: auto; }
           }
           .brand { text-align: center; padding-bottom: 12px; border-bottom: 1px dashed #9ca3af; }
           .brand h1 { margin: 0; font-size: 21px; }
@@ -89,19 +111,22 @@ export function printInvoice(order, targetWindow) {
           .grand-total { margin-top: 6px; padding-top: 8px; border-top: 1px solid #9ca3af; font-size: 15px; font-weight: 700; }
           .notes { margin-top: 10px; padding: 8px; border-radius: 6px; background: #f3f4f6; overflow-wrap: anywhere; }
           .thanks { margin-top: 14px; padding-top: 10px; border-top: 1px dashed #9ca3af; text-align: center; font-weight: 700; }
-          @media print {
-            html, body { width: 74mm; margin: 0; padding: 0; background: #fff; }
-            body { font-size: 11px; }
-            .receipt { padding: 0; border: 0; border-radius: 0; }
-            .toolbar { display: none !important; }
-            .brand h1 { font-size: 17px; }
-            table { font-size: 10px; }
-            tr, .detail, .total-row { break-inside: avoid; }
-          }
         </style>
+        <style id="print-page-size">@page { size: 80mm auto; margin: 3mm; }</style>
       </head>
       <body>
-        <div class="toolbar"><button class="print-button" type="button" onclick="window.print()">طباعة الفاتورة</button></div>
+        <div class="toolbar">
+          <label for="paper-size">مقاس الورق
+            <select id="paper-size">
+              <option value="80mm">حراري 80 مم</option>
+              <option value="58mm">حراري 58 مم</option>
+              <option value="a4">A4</option>
+              <option value="printer">حسب إعدادات الطابعة</option>
+            </select>
+          </label>
+          <button class="print-button" id="print-invoice" type="button">طباعة / اختيار الطابعة</button>
+          <p class="print-hint" id="print-status" aria-live="polite">اختر المقاس، ثم حدد الطابعة وإعداداتها من نافذة الطباعة.</p>
+        </div>
         <main class="receipt">
           <header class="brand"><h1>فروج باشا</h1><p>فاتورة طلب</p></header>
           <div class="order-meta">
@@ -117,18 +142,10 @@ export function printInvoice(order, targetWindow) {
           ${order.notes ? `<div class="notes"><strong>ملاحظات:</strong> ${escapeHtml(order.notes)}</div>` : ''}
           <footer class="thanks">شكراً لطلبكم من فروج باشا</footer>
         </main>
+        <script src="/print-invoice-window.js"></script>
       </body>
     </html>`);
   printWindow.document.close();
   printWindow.focus();
-  printWindow.setTimeout(() => {
-    if (printWindow.closed) return;
-    try {
-      printWindow.focus();
-      printWindow.print();
-    } catch (error) {
-      console.error('[Invoice] Automatic printing failed; use the print button:', error);
-    }
-  }, 500);
   return true;
 }
