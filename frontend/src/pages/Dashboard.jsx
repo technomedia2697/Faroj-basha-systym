@@ -406,7 +406,7 @@ export default function Dashboard() {
     }
     orderData.idempotency_key = idempotencyState.current.key;
     createRequestInFlight.current = true;
-    pendingInvoiceWindow.current = window.open('', '_blank', 'popup,width=420,height=720');
+    pendingInvoiceWindow.current = window.open('', '_blank');
     createMutation.mutate(orderData);
   };
 

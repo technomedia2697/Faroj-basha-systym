@@ -1,11 +1,11 @@
-import { getPaymentMethodLabel } from './orderHelpers';
+import { getPaymentMethodLabel } from './orderHelpers.js';
 
 export function printInvoice(order, targetWindow) {
   if (!order) return false;
 
   const printWindow = targetWindow && !targetWindow.closed
     ? targetWindow
-    : window.open('', '_blank', 'popup,width=420,height=720');
+    : window.open('', '_blank');
   if (!printWindow) return false;
 
   const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (character) => ({
@@ -117,9 +117,18 @@ export function printInvoice(order, targetWindow) {
           ${order.notes ? `<div class="notes"><strong>ملاحظات:</strong> ${escapeHtml(order.notes)}</div>` : ''}
           <footer class="thanks">شكراً لطلبكم من فروج باشا</footer>
         </main>
-        <script>window.addEventListener('load', () => { window.focus(); window.setTimeout(() => window.print(), 350); }, { once: true });</script>
       </body>
     </html>`);
   printWindow.document.close();
+  printWindow.focus();
+  printWindow.setTimeout(() => {
+    if (printWindow.closed) return;
+    try {
+      printWindow.focus();
+      printWindow.print();
+    } catch (error) {
+      console.error('[Invoice] Automatic printing failed; use the print button:', error);
+    }
+  }, 500);
   return true;
 }

@@ -94,6 +94,57 @@ html[lang="ar"] {
   }
 }
 
+@keyframes logoWriteIn {
+  from {
+    clip-path: inset(43% 22% 39% 77%);
+  }
+  to {
+    clip-path: inset(43% 22% 39% 22%);
+  }
+}
+
+@keyframes logoSignatureIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes fezDropIn {
+  0% {
+    opacity: 0;
+    transform: translateY(-105%) rotate(-12deg);
+  }
+  72% {
+    opacity: 1;
+    transform: translateY(7%) rotate(3deg);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) rotate(0);
+  }
+}
+
+@keyframes splashCaptionIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes splashFadeOut {
+  to {
+    opacity: 0;
+    visibility: hidden;
+  }
+}
+
 * {
   margin: 0;
   padding: 0;
@@ -150,6 +201,97 @@ select {
 
 #root {
   min-height: 100vh;
+}
+
+.brand-loading-overlay,
+.brand-loading-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background:
+    radial-gradient(ellipse at center, rgba(181, 18, 36, 0.18), transparent 55%),
+    var(--brand-charcoal);
+  color: var(--brand-cream);
+}
+
+.brand-loading-overlay {
+  animation: splashFadeOut 350ms ease 2.8s forwards;
+}
+
+.brand-loading-logo {
+  position: relative;
+  width: min(72vw, 320px);
+  height: min(72vw, 320px);
+  overflow: hidden;
+}
+
+.brand-loading-logo img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  mix-blend-mode: screen;
+}
+
+.brand-logo-word {
+  clip-path: inset(43% 22% 39% 77%);
+  animation: logoWriteIn 1.35s cubic-bezier(0.2, 0.75, 0.25, 1) 150ms forwards;
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 800 800'%3E%3Crect width='800' height='800' fill='white'/%3E%3Cpath d='M252 365 L248 280 L226 260 Q230 239 251 228 Q293 217 334 222 L383 307 Z' fill='black'/%3E%3C/svg%3E");
+  -webkit-mask-size: 100% 100%;
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 800 800'%3E%3Crect width='800' height='800' fill='white'/%3E%3Cpath d='M252 365 L248 280 L226 260 Q230 239 251 228 Q293 217 334 222 L383 307 Z' fill='black'/%3E%3C/svg%3E");
+  mask-size: 100% 100%;
+}
+
+.brand-logo-moustache {
+  clip-path: inset(59% 22% 29% 22%);
+  opacity: 0;
+  animation: logoSignatureIn 350ms ease 1.25s forwards;
+}
+
+.brand-logo-fez {
+  clip-path: inset(28% 51% 49% 26%);
+  opacity: 0;
+  transform-origin: 50% 100%;
+  animation: fezDropIn 800ms cubic-bezier(0.22, 1, 0.36, 1) 1.35s forwards;
+}
+
+.brand-loading-caption {
+  margin-top: 12px;
+  color: var(--brand-cream);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  animation: splashCaptionIn 500ms ease 1.75s both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .brand-loading-overlay {
+    animation-duration: 1ms;
+    animation-delay: 0ms;
+  }
+
+  .brand-logo-word,
+  .brand-logo-moustache,
+  .brand-logo-fez,
+  .brand-loading-caption {
+    animation-duration: 1ms;
+    animation-delay: 0ms;
+  }
+
+  .brand-logo-word {
+    clip-path: inset(43% 22% 39% 22%);
+  }
+
+  .brand-logo-moustache,
+  .brand-logo-fez {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 button,

@@ -23,12 +23,25 @@ function RouteLoadingFallback() {
   const { language } = useContext(LanguageContext);
 
   return (
-    <div
-      className="flex min-h-screen items-center justify-center bg-brand-charcoal text-brand-cream"
-      role="status"
-      aria-live="polite"
-    >
-      {language === 'ar' ? 'جارٍ تحميل الصفحة...' : 'Loading page...'}
+    <BrandLoadingScreen language={language} />
+  );
+}
+
+function BrandLoadingScreen({ language }) {
+  return (
+    <div className="brand-loading-screen" role="status" aria-live="polite">
+      <div
+        className="brand-loading-logo"
+        role="img"
+        aria-label={language === 'ar' ? 'فروج باشا' : 'Faroj Basha'}
+      >
+        <img className="brand-logo-word" src="/5994297452451795077.jpg" alt="" />
+        <img className="brand-logo-moustache" src="/5994297452451795077.jpg" alt="" />
+        <img className="brand-logo-fez" src="/5994297452451795077.jpg" alt="" />
+      </div>
+      <p className="brand-loading-caption">
+        {language === 'ar' ? 'نظام إدارة المخزون' : 'Inventory Management System'}
+      </p>
     </div>
   );
 }
@@ -45,12 +58,18 @@ function RoleRoute({ roles, children }) {
 
 export default function App() {
   const [language, setLanguage] = useState(localStorage.getItem('language') || 'ar');
+  const [showStartup, setShowStartup] = useState(true);
 
   useEffect(() => {
     localStorage.setItem('language', language);
     document.documentElement.dir = language === 'ar' ? 'rtl' : 'ltr';
     document.documentElement.lang = language;
   }, [language]);
+
+  useEffect(() => {
+    const startupTimer = window.setTimeout(() => setShowStartup(false), 3200);
+    return () => window.clearTimeout(startupTimer);
+  }, []);
 
   return (
     <LanguageContext.Provider value={{ language, setLanguage }}>
@@ -88,6 +107,11 @@ export default function App() {
           </Router>
         </QueryClientProvider>
       </AuthProvider>
+      {showStartup && (
+        <div className="brand-loading-overlay">
+          <BrandLoadingScreen language={language} />
+        </div>
+      )}
     </LanguageContext.Provider>
   );
 }

@@ -769,7 +769,7 @@ export default function Orders() {
     const totals = calculateOrderTotals(orderForm.items, discountPercent, taxRate, deliveryFee);
 
     createRequestInFlight.current = true;
-    pendingInvoiceWindow.current = window.open('', '_blank', 'popup,width=420,height=720');
+    pendingInvoiceWindow.current = window.open('', '_blank');
     createMutation.mutate({
       customer_name: orderForm.customer_name.trim(),
       customer_phone: orderForm.customer_phone || '',
