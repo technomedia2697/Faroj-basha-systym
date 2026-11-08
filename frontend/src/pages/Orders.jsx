@@ -1217,6 +1217,9 @@ export default function Orders() {
           <Receipt 
             order={selectedOrder}
             updateStatusMutation={updateStatusMutation}
+            prepareInvoiceWindow={() => {
+              pendingInvoiceWindow.current = window.open('', '_blank');
+            }}
             queryClient={queryClient}
             setToast={setToast}
             consumedSummary={consumedSummary}
@@ -1240,7 +1243,7 @@ export default function Orders() {
   );
 }
 
-function Receipt({ order, onStatusUpdate, updateStatusMutation, queryClient, setToast, printOrder, canConfirm, consumedSummary, isConsumedModalOpen, setIsConsumedModalOpen }) {
+function Receipt({ order, onStatusUpdate, updateStatusMutation, prepareInvoiceWindow, queryClient, setToast, printOrder, canConfirm, consumedSummary, isConsumedModalOpen, setIsConsumedModalOpen }) {
   // Helpers: localized type labels and robust date parsing (fallback to ObjectId timestamp)
   const typeLabels = { takeaway: 'استلام من المطعم', delivery: 'توصيل' };
   const parseDateFromObjectId = (id) => {
@@ -1392,10 +1395,14 @@ function Receipt({ order, onStatusUpdate, updateStatusMutation, queryClient, set
       <div className="space-y-3 pt-2">
         {canConfirm && order.status === 'pending' && (
           <button
-              onClick={() => {
-                pendingInvoiceWindow.current = window.open('', '_blank');
-                onStatusUpdate && updateStatusMutation.mutate({ id: order._id, status: 'completed' });
-              }}
+            onClick={() => {
+              if (updateStatusMutation.isLoading) return;
+              prepareInvoiceWindow();
+              updateStatusMutation.mutate(
+                { id: order._id, status: 'completed' },
+                { onSuccess: () => onStatusUpdate?.() }
+              );
+            }}
             disabled={updateStatusMutation.isLoading}
             className="w-full bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3 px-4 rounded-lg flex items-center justify-center gap-2 transition transform hover:scale-105 shadow-lg"
           >
