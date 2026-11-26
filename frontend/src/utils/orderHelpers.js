@@ -8,9 +8,9 @@ const TAX_CACHE_KEY = 'serverTaxRate';
 export function getTaxRate() {
   try {
     const taxRate = Number(localStorage.getItem(TAX_CACHE_KEY));
-    return localStorage.getItem(TAX_CACHE_KEY) !== null && Number.isFinite(taxRate) && taxRate >= 0 ? taxRate : 14;
+    return localStorage.getItem(TAX_CACHE_KEY) !== null && Number.isFinite(taxRate) && taxRate >= 0 ? taxRate : 0;
   } catch {
-    return 14;
+    return 0;
   }
 }
 

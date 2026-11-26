@@ -48,7 +48,7 @@ export default function Settings() {
 
   // General Settings State
   const [settings, setSettings] = useState({
-    taxRate: 14,
+    taxRate: 0,
     companyName: 'Faroj Basha Restaurant',
     companyAddress: '',
     companyPhone: '',
@@ -543,7 +543,7 @@ export default function Settings() {
                       step="0.1"
                       min="0"
                       max="100"
-                      placeholder="14"
+                      placeholder="0"
                     />
                     <div className="text-xs text-gray-400 mt-2 space-y-1">
                       <p>⚡ سيتم تطبيق هذه الضريبة على جميع الفواتير الجديدة</p>

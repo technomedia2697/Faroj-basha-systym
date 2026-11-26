@@ -700,6 +700,7 @@ export default function Dashboard() {
                     step="0.1"
                   />
                 </div>
+                {Number(orderForm.tax) > 0 && (
                 <div>
                   <label className="block text-xs font-semibold mb-1">الضريبة من الإعدادات (%)</label>
                   <input
@@ -709,6 +710,7 @@ export default function Dashboard() {
                     readOnly
                   />
                 </div>
+                )}
               </div>
                 <div className="mt-2 grid grid-cols-2 gap-1.5 text-[11px]">
                   <div className="rounded bg-gray-800 p-1.5">
@@ -719,10 +721,12 @@ export default function Dashboard() {
                     <span className="text-gray-400">قيمة الخصم:</span>
                     <p className="font-bold text-green-400">-{orderTotals.discount.toFixed(2)} ج.م</p>
                   </div>
+                  {orderTotals.tax > 0 && (
                   <div className="rounded bg-gray-800 p-1.5">
                     <span className="text-gray-400">قيمة الضريبة:</span>
                     <p className="font-bold text-yellow-500">+{orderTotals.tax.toFixed(2)} ج.م</p>
                   </div>
+                  )}
                   {orderForm.type === 'delivery' && (
                     <div className="rounded bg-gray-800 p-1.5">
                       <span className="text-gray-400">رسوم التوصيل:</span>

@@ -1143,17 +1143,19 @@ export default function Orders() {
                 step="0.1"
                 placeholder="0"
               />
-              <p className="text-xs text-gray-400 mt-1">معدل الضريبة من الإعدادات: {taxRate}%</p>
+              {taxRate > 0 && <p className="text-xs text-gray-400 mt-1">معدل الضريبة من الإعدادات: {taxRate}%</p>}
             </div>
             <div className="grid grid-cols-2 gap-2 text-xs">
               <div className="bg-gray-800 p-2 rounded">
                 <span className="text-gray-400">الإجمالي الفرعي:</span>
                 <p className="font-bold text-accent">{orderForm.items.reduce((sum, item) => sum + (item.price * item.quantity), 0).toFixed(2)} ج.م</p>
               </div>
+              {taxRate > 0 && (
               <div className="bg-gray-800 p-2 rounded">
                 <span className="text-gray-400">الضريبة ({taxRate}%):</span>
                 <p className="font-bold text-yellow-500">{((orderForm.items.reduce((sum, item) => sum + (item.price * item.quantity), 0) * (1 - (Number(orderForm.discount) || 0) / 100)) * (taxRate / 100)).toFixed(2)} ج.م</p>
               </div>
+              )}
             </div>
           </section>
 
