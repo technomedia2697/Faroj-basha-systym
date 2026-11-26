@@ -41,7 +41,6 @@ export default function ProductForm({ product, onSubmit, isLoading }) {
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    console.log('[ProductForm] Submitting:', formData);
     onSubmit(formData);
   };
 

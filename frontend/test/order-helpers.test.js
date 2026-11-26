@@ -16,8 +16,10 @@ globalThis.window = {
 beforeEach(() => storage.clear());
 
 test('a configured zero tax rate stays zero', () => {
-  storage.set('appSettings', JSON.stringify({ taxRate: 0 }));
+  storage.set('serverTaxRate', '0');
   assert.equal(getTaxRate(), 0);
+  storage.clear();
+  assert.equal(getTaxRate(), 14);
 });
 
 test('default delivery fee and totals use the same percentage calculations', () => {

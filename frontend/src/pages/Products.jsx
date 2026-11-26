@@ -49,7 +49,6 @@ export default function Products() {
   const { data: productsData = [], isLoading: productsLoading } = useQuery(
     'products',
     async () => {
-      console.log('[API] GET /api/products');
       const res = await productsAPI.getAll();
       return res.data;
     },
@@ -82,7 +81,6 @@ export default function Products() {
     ['recipes', selectedProductForRecipe?._id],
     async () => {
       if (!selectedProductForRecipe?._id) return [];
-      console.log('[API] GET /api/recipes/product/:id', selectedProductForRecipe._id);
       const res = await recipesAPI.getByProductId(selectedProductForRecipe._id);
       return res.data;
     },
@@ -135,12 +133,10 @@ export default function Products() {
 
   const deleteMutation = useMutation(
     (id) => {
-      console.log('[API Request] DELETE /api/products/:id', id);
       return productsAPI.delete(id);
     },
     {
       onSuccess: () => {
-        console.log('[API Success] Product deleted');
         setToast({ type: 'success', message: currentLabels.deleteSuccess });
         queryClient.invalidateQueries('products');
       },
@@ -156,7 +152,6 @@ export default function Products() {
 
   const toggleStatusMutation = useMutation(
     (id) => {
-      console.log('[API Request] PATCH /api/products/:id/toggle-status', id);
       return productsAPI.toggleStatus(id);
     },
     {
@@ -181,7 +176,6 @@ export default function Products() {
   });
 
   const handleSubmit = (formData) => {
-    console.log('[Form Submit] Product data:', formData);
     
     // Validate required fields
     if (!formData.name) {
@@ -200,7 +194,6 @@ export default function Products() {
       status: formData.status || 'active',
     };
     
-    console.log('[Final Payload] Sending to API:', payload);
     
     if (selectedProduct) {
       updateMutation.mutate({ id: selectedProduct._id, data: payload });
@@ -413,7 +406,6 @@ function RecipeManager({ product, ingredients, recipes, deleteRecipe }) {
       quantity: parseFloat(quantity),
     };
     
-    console.log('[Form Submit] Recipe data:', payload);
     addRecipeMutation.mutate(payload);
   };
 

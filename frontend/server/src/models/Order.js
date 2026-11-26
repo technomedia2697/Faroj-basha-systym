@@ -4,9 +4,10 @@ const OrderSchema = new mongoose.Schema(
   {
     order_number: {
       type: String,
-      unique: true,
       required: true,
     },
+    // Restaurant business day (Cairo, YYYY-MM-DD). Order numbers restart at 1 each day.
+    order_day: { type: String },
     idempotencyKey: {
       type: String,
       maxlength: 128,
@@ -66,6 +67,11 @@ const OrderSchema = new mongoose.Schema(
     tax: {
       type: Number,
       default: 0,
+    },
+    // Rate (%) that was in force when the order was created; kept so old receipts never change.
+    tax_rate: {
+      type: Number,
+      default: null,
     },
     total: {
       type: Number,
@@ -150,6 +156,13 @@ const OrderSchema = new mongoose.Schema(
     completedAt: Date,
   },
   { timestamps: true }
+);
+
+// Number + day must be unique (old orders without order_day are ignored by this index).
+// NOTE: the old single-field unique index on order_number must be dropped once in MongoDB (db.orders.dropIndex('order_number_1')).
+OrderSchema.index(
+  { order_day: 1, order_number: 1 },
+  { unique: true, partialFilterExpression: { order_day: { $type: 'string' } } }
 );
 
 OrderSchema.index(

@@ -7,6 +7,8 @@ import Ingredient from '../models/Ingredient.js';
 import StockMovement from '../models/StockMovement.js';
 import ProductionLog from '../models/ProductionLog.js';
 import Customer from '../models/Customer.js';
+import { getTaxRate as getServerTaxRate } from '../models/Setting.js';
+import { nextSequence, cairoDay, cairoDayRange, orderRef } from '../models/Counter.js';
 import { verifyToken } from '../middleware/auth.js';
 import { requirePermission, requireRole } from '../middleware/permissions.js';
 import { sendRouteError } from '../middleware/routeError.js';
@@ -42,10 +44,33 @@ async function awardCustomerForOrder(order, session) {
   );
 }
 
+// Take back the loyalty point and counters an order gave its customer (order deleted or cancelled).
+async function revokeCustomerAward(order, session) {
+  if (!order?.loyaltyPointsAwarded || !order.customerId) return null;
+  const customer = await Customer.findById(order.customerId).session(session || null);
+  if (!customer) return null;
+  customer.loyaltyPoints = Math.max(0, (customer.loyaltyPoints || 0) - 1);
+  customer.orderCount = Math.max(0, (customer.orderCount || 0) - 1);
+  customer.totalSpent = Math.max(0, (customer.totalSpent || 0) - (Number(order.total) || 0));
+  await customer.save({ session });
+  order.loyaltyPointsAwarded = false;
+  return customer;
+}
+
 // GET all orders - All users can view
 router.get('/', verifyToken, requirePermission('view_orders'), async (req, res) => {
   try {
-    const orders = await Order.find()
+    // Optional ?day=YYYY-MM-DD (Cairo day). Orders from older versions have no order_day, so match them by date.
+    const filter = {};
+    if (req.query.day) {
+      const range = cairoDayRange(String(req.query.day));
+      if (!range) return res.status(400).json({ error: 'تاريخ غير صالح' });
+      filter.$or = [
+        { order_day: String(req.query.day) },
+        { order_day: { $exists: false }, createdAt: { $gte: range[0], $lt: range[1] } },
+      ];
+    }
+    const orders = await Order.find(filter)
       .populate('items.product_id', 'name price')
       .populate('createdBy', 'name email')
       .populate('customerId', 'name phone loyaltyPoints')
@@ -87,7 +112,6 @@ router.post('/', verifyToken, requirePermission('create_orders'), async (req, re
     customer_address = '',
     items,
     discount: requestedDiscount = 0,
-    tax: requestedTax = 0,
     payment_method: submittedPaymentMethod = 'cash',
     notes = '',
     type = 'takeaway',
@@ -141,8 +165,8 @@ router.post('/', verifyToken, requirePermission('create_orders'), async (req, re
   ) {
     return res.status(400).json({ error: 'Customer name and items/checks are required' });
   }
-  if (![requestedDiscount, requestedTax, delivery_fee ?? 0].every((value) => Number.isFinite(Number(value)) && Number(value) >= 0)) {
-    return res.status(400).json({ error: 'Discount, tax, and delivery fee must be non-negative numbers' });
+  if (![requestedDiscount, delivery_fee ?? 0].every((value) => Number.isFinite(Number(value)) && Number(value) >= 0)) {
+    return res.status(400).json({ error: 'Discount and delivery fee must be non-negative numbers' });
   }
 
   try {
@@ -157,7 +181,6 @@ router.post('/', verifyToken, requirePermission('create_orders'), async (req, re
     }
 
     const discount = Number(requestedDiscount);
-    const tax = Number(requestedTax);
     delivery_fee = Number(delivery_fee || 0);
 
     let subtotal = 0;
@@ -270,6 +293,9 @@ router.post('/', verifyToken, requirePermission('create_orders'), async (req, re
     }
     const finalSubtotal = subtotal - discount;
     const totalDeliveryFees = delivery_fee + checksProcessed.reduce((s, c) => s + (c.delivery_fee || 0), 0);
+    // Tax is always computed here from the rate saved in the database; any tax sent by the client is ignored.
+    const taxRate = await getServerTaxRate();
+    const tax = Math.round(finalSubtotal * taxRate) / 100;
     const total = finalSubtotal + tax + totalDeliveryFees;
 
     console.log('[Order POST] ✓ Totals calculated - subtotal:', subtotal, 'discount:', discount, 'tax:', tax, 'total:', total);
@@ -283,6 +309,7 @@ router.post('/', verifyToken, requirePermission('create_orders'), async (req, re
       subtotal,
       discount,
       tax,
+      tax_rate: taxRate,
       delivery_fee,
       type,
       table_number,
@@ -295,9 +322,16 @@ router.post('/', verifyToken, requirePermission('create_orders'), async (req, re
       ...(idempotencyKey ? { idempotencyKey } : {}),
     });
 
+    for (let attempt = 0; ; attempt += 1) {
     const session = await mongoose.startSession();
     session.startTransaction();
     try {
+      // Sequential invoice number (1, 2, 3, ...) taken inside the transaction so a failed order leaves no gap.
+      order.order_day = cairoDay();
+      order.order_number = String(await nextSequence(`order:${order.order_day}`, session));
+      order.inventory_deducted = false;
+      order.customerId = null;
+      order.loyaltyPointsAwarded = false;
       let consumed = null;
       if (['takeaway', 'delivery'].includes(type)) {
         consumed = await deductInventoryForOrderAtomic(order, req.userId, session);
@@ -320,6 +354,11 @@ router.post('/', verifyToken, requirePermission('create_orders'), async (req, re
       return res.status(201).json(populatedOrder);
     } catch (err) {
       await session.abortTransaction();
+      // Two cashiers saving at the same moment: retry so the second one still gets the next number.
+      if (err.hasErrorLabel?.('TransientTransactionError') && attempt < 12) {
+        await new Promise((resolve) => setTimeout(resolve, 20 + Math.random() * 60 * (attempt + 1)));
+        continue;
+      }
       if (err.code === 11000 && idempotencyKey) {
         const existingOrder = await Order.findOne({ idempotencyKey, createdBy: req.userId })
           .populate('items.product_id', 'name price')
@@ -333,6 +372,7 @@ router.post('/', verifyToken, requirePermission('create_orders'), async (req, re
       throw err;
     } finally {
       await session.endSession();
+    }
     }
   } catch (error) {
     if (error.code === 11000 && idempotencyKey) {
@@ -398,10 +438,12 @@ router.put('/:id/status', verifyToken, requireRole(['admin', 'staff']), async (r
         await session.endSession();
       }
     } else {
+      const wasCancelled = status === 'cancelled' && order.status === 'pending';
       order.status = status;
       if (status === 'completed') {
         order.completedAt = new Date();
       }
+      if (wasCancelled) await revokeCustomerAward(order);
       await order.save();
     }
 
@@ -504,7 +546,7 @@ async function autoProduceOrderItems(order, userId) {
           ingredient: ingredient._id,
           movementType: 'OUT',
           quantity: requiredAmount,
-          reference: order.order_number,
+          reference: orderRef(order),
           reason: 'production',
           recordedBy: userId,
           notes: `Auto-production for order ${order.order_number} - product ${product.name}`,
@@ -518,7 +560,7 @@ async function autoProduceOrderItems(order, userId) {
         product: item.product_id,
         quantity: item.quantity,
         status: 'completed',
-        reference: order.order_number,
+        reference: orderRef(order),
         producedBy: userId,
         notes: `Auto-produced from order ${order.order_number}`
       });
@@ -597,7 +639,7 @@ async function deductInventoryForOrder(order, userId, session = null) {
       ingredient: ingredientId,
       movementType: 'OUT',
       quantity: deductionData.totalQuantity,
-      reference: order.order_number,
+      reference: orderRef(order),
       reason: 'production',
       recordedBy: userId,
       notes: `Stock deduction for order ${order.order_number} - customer ${order.customer_name}`,
@@ -664,7 +706,7 @@ async function deductInventoryForOrderAtomic(order, userId, session = null) {
       ingredient: id,
       movementType: 'OUT',
       quantity: data.totalQuantity,
-      reference: order.order_number,
+      reference: orderRef(order),
       reason: 'production',
       recordedBy: userId,
       notes: `Stock deduction for order ${order.order_number}`,
@@ -871,7 +913,11 @@ router.delete('/:id', verifyToken, requireRole('admin'), async (req, res) => {
   console.log('[Order DELETE] Attempting to delete:', req.params.id);
   
   try {
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      return res.status(400).json({ error: 'Invalid order ID' });
+    }
     const order = await Order.findByIdAndDelete(req.params.id);
+    if (order) await revokeCustomerAward(order);
 
     if (!order) {
       console.warn('[Order DELETE] Order not found:', req.params.id);

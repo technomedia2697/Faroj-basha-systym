@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { orderDay } from '../utils/orderDay';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from 'react-query';
 import { customersAPI, isDemoMode } from '../api';
 import { Search, Plus, Phone, MapPin, Pencil, Trash2, UserCircle } from 'lucide-react';
@@ -272,7 +273,7 @@ function CustomerOrderHistory({ customer }) {
             {orders.map((order) => (
               <section key={order._id || order.order_number} className="rounded-lg border border-white/10 bg-black/20 p-3 text-xs">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <strong>طلب #{order.order_number || '-'}</strong>
+                  <strong>طلب #{order.order_number || '-'} · {orderDay(order)}</strong>
                   <span className={order.status === 'completed' ? 'text-emerald-300' : order.status === 'cancelled' ? 'text-red-300' : 'text-amber-300'}>
                     {statusLabel(order.status)}
                   </span>

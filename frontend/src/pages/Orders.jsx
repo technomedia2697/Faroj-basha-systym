@@ -1,5 +1,7 @@
 import React, { useState, useContext, useCallback, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from 'react-query';
+import { useTaxRate } from '../utils/useTaxRate';
+import { orderDay, orderRefText, cairoToday } from '../utils/orderDay';
 import { ordersAPI, productsAPI, categoriesAPI, customersAPI, isDemoMode } from '../api';
 import { Plus, Trash2, Check, X, Search, ExternalLink } from 'lucide-react';
 import Modal from '../components/Modal';
@@ -112,6 +114,8 @@ export default function Orders() {
   const [isNewOrderOpen, setIsNewOrderOpen] = useState(false);
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
+  // Order numbers restart every Cairo day, so the list defaults to today; empty = all days.
+  const [dayFilter, setDayFilter] = useState(() => cairoToday());
   const [toast, setToast] = useState(null);
   const [customers, setCustomers] = useState(getStoredCustomers);
   useQuery('customers', async () => {
@@ -174,7 +178,7 @@ export default function Orders() {
   });
 
   // حالة الضريبة من الإعدادات
-  const [taxRate, setTaxRate] = useState(getTaxRate);
+  const taxRate = useTaxRate();
 
   useEffect(() => {
     if (!isDemoMode) return undefined;
@@ -187,23 +191,6 @@ export default function Orders() {
     };
   }, []);
 
-  // ============ EFFECT - تحديث الضريبة عند تغيير الإعدادات ============
-  useEffect(() => {
-    const handleStorageChange = () => {
-      setTaxRate(getTaxRate());
-    };
-    
-    // استمع إلى الحدث المخصص من Settings
-    window.addEventListener('storageUpdated', handleStorageChange);
-    // استمع إلى حدث storage من نوافذ أخرى
-    window.addEventListener('storage', handleStorageChange);
-
-    return () => {
-      window.removeEventListener('storageUpdated', handleStorageChange);
-      window.removeEventListener('storage', handleStorageChange);
-    };
-  }, []);
-
   // If cashier selects 'delivery', auto-fill delivery_fee from app settings (if blank)
   useEffect(() => {
     try {
@@ -211,7 +198,6 @@ export default function Orders() {
       if (orderForm.type === 'delivery' && (orderForm.delivery_fee === '' || orderForm.delivery_fee === null || typeof orderForm.delivery_fee === 'undefined')) {
         const fee = (typeof settings.deliveryFeeDefault !== 'undefined') ? settings.deliveryFeeDefault : 0;
         setOrderForm(prev => ({ ...prev, delivery_fee: fee }));
-        console.log('[Order Form] Auto-filled delivery_fee from settings:', fee);
       }
     } catch (e) {
       // ignore parse errors
@@ -286,7 +272,6 @@ export default function Orders() {
       if (quickOrder.type === 'delivery' && (quickOrder.delivery_fee === '' || quickOrder.delivery_fee === null || typeof quickOrder.delivery_fee === 'undefined')) {
         const fee = (typeof settings.deliveryFeeDefault !== 'undefined') ? settings.deliveryFeeDefault : 0;
         setQuickOrder(prev => ({ ...prev, delivery_fee: fee }));
-        console.log('[QuickOrder] Auto-filled delivery_fee from settings:', fee);
       }
     } catch (e) {
       // ignore
@@ -344,11 +329,10 @@ export default function Orders() {
       })
     : [];
   const selectedProduct = activeProducts.find((product) => product._id === selectedProductId);
-  console.log('[Products] Final array:', products);
 
   // Fetch orders via React Query
-  const { data: ordersData = [], isLoading: ordersLoading } = useQuery('orders', async () => {
-    const res = await ordersAPI.getAll();
+  const { data: ordersData = [], isLoading: ordersLoading } = useQuery(['orders', dayFilter], async () => {
+    const res = await ordersAPI.getAll(dayFilter && !isDemoMode ? { day: dayFilter } : undefined);
     return res.data;
   }, {
     refetchInterval: 5000,
@@ -365,13 +349,13 @@ export default function Orders() {
 
   // Ensure ordersList is an array
   const ordersList = Array.isArray(ordersData) ? ordersData : [];
-  console.log('[Orders] Final array:', ordersList);
 
   // Filter orders based on search term
-  const filteredOrders = ordersList.filter(order => 
+  const filteredOrders = ordersList.filter(order => !dayFilter || orderDay(order) === dayFilter).filter(order => 
     order.customer_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
     order.customer_phone?.includes(searchTerm) ||
-    order._id?.includes(searchTerm)
+    order._id?.includes(searchTerm) ||
+    (searchTerm.trim() && orderRefText(order).includes(searchTerm.trim().replace(/^#/, '')))
   );
 
   // ============ MUTATIONS ============
@@ -466,7 +450,7 @@ export default function Orders() {
               <div class="totals-section">
                 <div class="total-row"><span>الإجمالي الفرعي:</span><span>${(order.subtotal || 0).toFixed(2)} ج.م</span></div>
                 ${order.discount > 0 ? `<div class="total-row discount"><span>الخصم:</span><span>- ${(order.discount || 0).toFixed(2)} ج.م</span></div>` : ''}
-                ${order.tax > 0 ? `<div class="total-row tax"><span>الضريبة (14%):</span><span>+ ${(order.tax || 0).toFixed(2)} ج.م</span></div>` : ''}
+                ${order.tax > 0 ? `<div class="total-row tax"><span>الضريبة${order.tax_rate != null ? ` (${order.tax_rate}%)` : ''}:</span><span>+ ${(order.tax || 0).toFixed(2)} ج.م</span></div>` : ''}
                 ${order.delivery_fee && Number(order.delivery_fee) > 0 ? `<div class="total-row"><span>رسوم التوصيل:</span><span>+ ${(Number(order.delivery_fee) || 0).toFixed(2)} ج.م</span></div>` : ''}
                 <div class="total-row final"><span>المجموع النهائي:</span><span>${(order.total || 0).toFixed(2)} ج.م</span></div>
               </div>
@@ -647,7 +631,6 @@ export default function Orders() {
   // ============ HELPER FUNCTIONS ============
 
   const resetForm = useCallback(() => {
-    console.log('[Order] Resetting form');
     setOrderForm({
       customer_name: '',
       customer_phone: '',
@@ -667,7 +650,6 @@ export default function Orders() {
 
   // دالة إضافة منتج للفورم - هذي الدالة الأساسية
   const addItemToOrder = useCallback(() => {
-    console.log('[AddItem] Called with productId:', selectedProductId, 'quantity:', selectedQuantity);
 
     if (!selectedProductId) {
       console.warn('[AddItem] No product selected');
@@ -688,7 +670,6 @@ export default function Orders() {
       return;
     }
 
-    console.log('[AddItem] Found product:', product);
 
     const newItem = {
       product_id: product._id,
@@ -697,11 +678,9 @@ export default function Orders() {
       quantity: selectedQuantity,
     };
 
-    console.log('[AddItem] New item to add:', newItem);
 
     // تحديث state باستخدام callback function
     setOrderForm(prevForm => {
-      console.log('[AddItem] Current items before adding:', prevForm.items);
       
       const updatedItems = [...prevForm.items];
       const existingItemIndex = updatedItems.findIndex(item => item.product_id === product._id);
@@ -709,16 +688,12 @@ export default function Orders() {
       if (existingItemIndex >= 0) {
         // إذا كان المنتج موجود، حدّث الكمية
         updatedItems[existingItemIndex].quantity += selectedQuantity;
-        console.log('[AddItem] Updated existing item quantity to:', updatedItems[existingItemIndex].quantity);
       } else {
         // أضف منتج جديد
         updatedItems.push(newItem);
-        console.log('[AddItem] Added new item, total items now:', updatedItems.length);
       }
 
       const updated = { ...prevForm, items: updatedItems };
-      console.log('[AddItem] ✓ Updated orderForm.items:', updated.items);
-      console.log('[AddItem] ✓ Items count after update:', updated.items.length);
       return updated;
     });
 
@@ -730,13 +705,11 @@ export default function Orders() {
   }, [selectedProductId, selectedQuantity, products]);
 
   const removeItemFromOrder = useCallback((productId) => {
-    console.log('[RemoveItem] Removing item:', productId);
     setOrderForm(prev => {
       const updated = {
         ...prev,
         items: prev.items.filter(item => item.product_id !== productId)
       };
-      console.log('[RemoveItem] Updated items:', updated.items);
       return updated;
     });
   }, []);
@@ -835,7 +808,19 @@ export default function Orders() {
               className="input w-full pl-12 text-sm sm:text-base"
             />
           </div>
-          <div className="flex shrink-0 justify-end">
+          <div className="flex shrink-0 items-center gap-2">
+            <input
+              type="date"
+              aria-label="يوم الطلبات"
+              value={dayFilter}
+              onChange={(e) => setDayFilter(e.target.value)}
+              className="input text-sm"
+            />
+            {dayFilter ? (
+              <button type="button" className="btn-secondary text-xs py-2" onClick={() => setDayFilter('')}>كل الأيام</button>
+            ) : (
+              <button type="button" className="btn-secondary text-xs py-2" onClick={() => setDayFilter(cairoToday())}>اليوم</button>
+            )}
             {canCreateOrders && (
               <button
                 type="button"
@@ -859,6 +844,7 @@ export default function Orders() {
             <table className="table text-xs sm:text-sm md:text-base">
               <thead>
                 <tr>
+                  <th>رقم الطلب</th>
                   <th>اسم العميل</th>
                   <th>الهاتف</th>
                   <th>الإجمالي</th>
@@ -871,6 +857,7 @@ export default function Orders() {
               <tbody>
                 {filteredOrders.map((order, idx) => (
                   <tr key={order._id || idx} className="hover:bg-gray-700 transition">
+                    <td className="font-bold whitespace-nowrap">#{order.order_number}<div className="text-[10px] font-normal text-gray-400">{orderDay(order)}</div></td>
                     <td className="font-medium">{order.customer_name}</td>
                     <td>{order.customer_phone}</td>
                     <td className="font-bold text-accent">{order.total?.toFixed(2) || 0} ج.م</td>
@@ -1150,7 +1137,7 @@ export default function Orders() {
                 type="number"
                 className="input text-sm"
                 value={orderForm.discount}
-                onChange={(e) => setOrderForm({ ...orderForm, discount: parseFloat(e.target.value) || 0 })}
+                onChange={(e) => setOrderForm({ ...orderForm, discount: Math.min(100, Math.max(0, parseFloat(e.target.value) || 0)) })}
                 min="0"
                 max="100"
                 step="0.1"
@@ -1277,7 +1264,7 @@ function Receipt({ order, onStatusUpdate, updateStatusMutation, prepareInvoiceWi
         <p className="text-amber-100 font-semibold">مطعم فروج باشا</p>
         <div className="h-1 w-12 bg-amber-400 mx-auto my-2 rounded"></div>
         <div className="flex items-center justify-center gap-2">
-          <p className="text-amber-50 text-sm">#{order.order_number}</p>
+          <p className="text-amber-50 text-sm">#{order.order_number} · {orderDay(order)}</p>
         </div>  
       </div>
 
@@ -1588,7 +1575,7 @@ function Receipt({ order, onStatusUpdate, updateStatusMutation, prepareInvoiceWi
                       ` : ''}
                       ${order.tax > 0 ? `
                         <div class="total-row tax">
-                        <span>الضريبة:</span>
+                        <span>الضريبة${order.tax_rate != null ? ` (${order.tax_rate}%)` : ''}:</span>
                           <span>+ ${(order.tax || 0).toFixed(2)} ج.م</span>
                         </div>
                       ` : ''}

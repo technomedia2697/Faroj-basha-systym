@@ -59,7 +59,7 @@ router.get('/', verifyToken, requirePermission('view_customers'), async (req, re
         ...phoneFilters,
       ],
     })
-      .select('customerId customer_phone customer_phone_normalized total')
+      .select('customerId customer_phone customer_phone_normalized total status')
       .lean();
 
     const customerById = new Map(customers.map((customer) => [String(customer._id), customer]));
@@ -68,6 +68,7 @@ router.get('/', verifyToken, requirePermission('view_customers'), async (req, re
       { orderCount: 0, totalSpent: 0 },
     ]));
     for (const order of orders) {
+      if (order.status === 'cancelled') continue;
       const linkedCustomer = order.customerId && customerById.get(String(order.customerId));
       const normalizedPhone = linkedCustomer?.normalizedPhone
         || normalizePhone(order.customer_phone_normalized || order.customer_phone);
@@ -81,9 +82,10 @@ router.get('/', verifyToken, requirePermission('view_customers'), async (req, re
       const stats = statsByPhone.get(customer.normalizedPhone);
       return {
         ...customer,
-        orderCount: Math.max(Number(customer.orderCount) || 0, stats.orderCount),
-        loyaltyPoints: Math.max(Number(customer.loyaltyPoints) || 0, stats.orderCount),
-        totalSpent: Math.max(Number(customer.totalSpent) || 0, stats.totalSpent),
+        // Counters come from the orders that actually exist, so deleted or cancelled orders do not leave stale numbers.
+        orderCount: stats.orderCount,
+        loyaltyPoints: Math.max(Number(customer.loyaltyPoints) || 0, 0),
+        totalSpent: stats.totalSpent,
       };
     }));
   } catch (error) {

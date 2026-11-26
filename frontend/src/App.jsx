@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from 'react-query';
 import Layout from './components/Layout';
 import { AuthProvider } from './contexts/AuthContext';
 import { LanguageContext } from './contexts/LanguageContext';
+import { startEnglishTranslation, stopEnglishTranslation } from './utils/translateDom';
 import './index.css';
 
 const Login = lazy(() => import('./pages/Login'));
@@ -64,6 +65,13 @@ export default function App() {
     localStorage.setItem('language', language);
     document.documentElement.dir = language === 'ar' ? 'rtl' : 'ltr';
     document.documentElement.lang = language;
+  }, [language]);
+
+  // English mode: translate the Arabic text that pages still hard-code.
+  useEffect(() => {
+    if (language === 'en') startEnglishTranslation(document.body);
+    else stopEnglishTranslation();
+    return () => stopEnglishTranslation();
   }, [language]);
 
   useEffect(() => {

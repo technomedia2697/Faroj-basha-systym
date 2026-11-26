@@ -1,5 +1,6 @@
 const paperSize = document.getElementById('paper-size');
 const pageStyle = document.getElementById('print-page-size');
+const copies = document.getElementById('copies');
 const printButton = document.getElementById('print-invoice');
 const printStatus = document.getElementById('print-status');
 
@@ -29,6 +30,9 @@ function updatePaperSize() {
 }
 
 paperSize.addEventListener('change', updatePaperSize);
+if (copies) {
+  copies.addEventListener('change', () => { document.body.dataset.copies = copies.value; });
+}
 printButton.addEventListener('click', () => {
   try {
     window.focus();

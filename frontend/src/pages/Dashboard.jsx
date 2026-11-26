@@ -7,6 +7,7 @@ import { LanguageContext } from '../contexts/LanguageContext';
 import Toast from '../components/Toast';
 import LoadingSkeleton from '../components/LoadingSkeleton';
 import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, Filler } from 'chart.js';
+import { useTaxRate } from '../utils/useTaxRate';
 import { calculateOrderTotals, getDefaultDeliveryFee, getStoredCustomers, getTaxRate, normalizePhone, saveOrderCustomer } from '../utils/orderHelpers';
 import { printInvoice } from '../utils/printInvoice';
 import PaymentMethodField from '../components/PaymentMethodField';
@@ -90,10 +91,12 @@ export default function Dashboard() {
   const pendingInvoiceWindow = useRef(null);
   const idempotencyState = useRef({ fingerprint: '', key: '' });
 
+  useTaxRate(); // keeps the shared tax rate fresh on this screen
   useEffect(() => {
-    if (!isDemoMode) return undefined;
-    const refreshCustomers = () => setCustomers(getStoredCustomers());
     const refreshTaxRate = () => setOrderForm((current) => ({ ...current, tax: getTaxRate() }));
+    window.addEventListener('taxRateChanged', refreshTaxRate);
+    if (!isDemoMode) return () => window.removeEventListener('taxRateChanged', refreshTaxRate);
+    const refreshCustomers = () => setCustomers(getStoredCustomers());
     window.addEventListener('customersUpdated', refreshCustomers);
     window.addEventListener('storage', refreshCustomers);
     window.addEventListener('storageUpdated', refreshTaxRate);
@@ -691,7 +694,7 @@ export default function Dashboard() {
                     type="number"
                     className="input !px-3 !py-1.5 text-sm"
                     value={orderForm.discount}
-                    onChange={(e) => setOrderForm({ ...orderForm, discount: parseFloat(e.target.value) || 0 })}
+                    onChange={(e) => setOrderForm({ ...orderForm, discount: Math.min(100, Math.max(0, parseFloat(e.target.value) || 0)) })}
                     min="0"
                     max="100"
                     step="0.1"

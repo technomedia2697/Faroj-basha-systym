@@ -62,7 +62,7 @@ router.get('/summary', verifyToken, async (req, res) => {
     console.log('[Dashboard SUMMARY] Most consumed ingredients (last 30 days):', mostConsumed.length);
 
     // Total active products
-    const totalProducts = await Product.countDocuments({ isActive: true });
+    const totalProducts = await Product.countDocuments({ status: 'active' });
     console.log('[Dashboard SUMMARY] Active products:', totalProducts);
 
     console.log('[Dashboard SUMMARY] ✓ Successfully fetched all dashboard data');
@@ -94,7 +94,7 @@ router.get('/consumption-chart', verifyToken, async (req, res) => {
       {
         $group: {
           _id: {
-            $dateToString: { format: '%Y-%m-%d', date: '$createdAt' }
+            $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: 'Africa/Cairo' }
           },
           movements: { $sum: 1 },
           consumed: {

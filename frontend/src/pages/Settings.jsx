@@ -19,7 +19,8 @@ import {
 } from 'lucide-react';
 import Toast from '../components/Toast';
 import LoadingSkeleton from '../components/LoadingSkeleton';
-import { authAPI } from '../api';
+import { authAPI, settingsAPI } from '../api';
+import { cacheTaxRate } from '../utils/orderHelpers';
 import { LanguageContext } from '../contexts/LanguageContext';
 import { AuthContext } from '../contexts/AuthContext';
 
@@ -117,6 +118,12 @@ export default function Settings() {
       if (savedSettings) {
         setSettings(JSON.parse(savedSettings));
       }
+      // The tax rate is shared by all devices and stored in the database.
+      const response = await settingsAPI.get();
+      if (Number.isFinite(Number(response.data?.taxRate))) {
+        cacheTaxRate(response.data.taxRate);
+        setSettings((previous) => ({ ...previous, taxRate: Number(response.data.taxRate) }));
+      }
     } catch (error) {
       console.error('Failed to load settings:', error);
       showError('فشل تحميل الإعدادات');
@@ -183,8 +190,12 @@ export default function Settings() {
         return;
       }
 
-      // Save to localStorage
-      localStorage.setItem('appSettings', JSON.stringify(settings));
+      // Tax rate goes to the database first; if that fails nothing is reported as saved.
+      const saved = await settingsAPI.update({ taxRate: settings.taxRate });
+      cacheTaxRate(saved.data.taxRate);
+      // Other (device-only) settings stay in this browser.
+      const { taxRate: _sharedTaxRate, ...deviceSettings } = settings;
+      localStorage.setItem('appSettings', JSON.stringify(deviceSettings));
       
       // Dispatch event to update other tabs/windows
       window.dispatchEvent(new Event('storageUpdated'));
@@ -192,7 +203,7 @@ export default function Settings() {
       showSuccess('✓ تم حفظ الإعدادات بنجاح! سيتم تطبيق معدل الضريبة على جميع الفواتير الجديدة');
     } catch (error) {
       console.error('Error saving settings:', error);
-      showError('فشل حفظ الإعدادات');
+      showError(error.response?.data?.error ? `فشل حفظ الإعدادات: ${error.response.data.error}` : 'فشل حفظ الإعدادات');
     } finally {
       setIsLoading(false);
     }
@@ -495,7 +506,7 @@ export default function Settings() {
                       value={settings.companyEmail}
                       onChange={handleSettingChange}
                       className="input w-full"
-                      placeholder="info@ramada.com"
+                      placeholder="name@example.com"
                     />
                   </div>
 

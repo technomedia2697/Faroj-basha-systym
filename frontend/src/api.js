@@ -21,15 +21,34 @@ function readDemoList(key) {
   }
 }
 
-const demoUsers = {
-  'admin@farojbasha.com': { password: 'SecurePassword123!', name: 'Administrator', role: 'admin' },
-  'cashier@farojbasha.com': { password: 'CashierDemo123!', name: 'Demo Cashier', role: 'staff' },
-};
+// Demo mode (local dev only). Credentials come from VITE_DEMO_* variables in a local .env;
+// nothing is stored in the repository. With no variables set, demo login is disabled.
+const demoUsers = {};
+if (import.meta.env.VITE_DEMO_ADMIN_EMAIL && import.meta.env.VITE_DEMO_ADMIN_PASSWORD) {
+  demoUsers[String(import.meta.env.VITE_DEMO_ADMIN_EMAIL).toLowerCase()] = {
+    password: import.meta.env.VITE_DEMO_ADMIN_PASSWORD, name: 'Administrator', role: 'admin',
+  };
+}
+if (import.meta.env.VITE_DEMO_CASHIER_EMAIL && import.meta.env.VITE_DEMO_CASHIER_PASSWORD) {
+  demoUsers[String(import.meta.env.VITE_DEMO_CASHIER_EMAIL).toLowerCase()] = {
+    password: import.meta.env.VITE_DEMO_CASHIER_PASSWORD, name: 'Demo Cashier', role: 'staff',
+  };
+}
 
 function demoResponse(config) {
   const path = config.url || '';
   const method = (config.method || 'get').toLowerCase();
   const body = typeof config.data === 'string' ? JSON.parse(config.data || '{}') : (config.data || {});
+
+  if (path.endsWith('/settings')) {
+    if (method === 'put') {
+      const rate = Number(body.taxRate);
+      if (!Number.isFinite(rate) || rate < 0 || rate > 100) return { status: 400, data: { error: 'Tax rate must be a number between 0 and 100' } };
+      localStorage.setItem('demoTaxRate', String(rate));
+    }
+    const stored = localStorage.getItem('demoTaxRate');
+    return { status: 200, data: { taxRate: stored === null ? 14 : Number(stored) } };
+  }
 
   if (path.endsWith('/auth/login') && method === 'post') {
     const email = String(body.email || '').trim().toLowerCase();
@@ -146,6 +165,7 @@ function demoResponse(config) {
       ...body,
       _id: window.crypto.randomUUID(),
       order_number: `DEMO-${Date.now()}`,
+      order_day: new Date().toISOString().slice(0, 10),
       status: 'pending',
       createdAt: new Date().toISOString(),
       ...(idempotencyKey ? { idempotency_key: idempotencyKey } : {}),
@@ -200,7 +220,6 @@ api.interceptors.request.use(
 
     // Log request in development
     if (import.meta.env.DEV) {
-      console.log(`📤 ${config.method?.toUpperCase()} ${config.baseURL}${config.url}`);
     }
 
     return config;
@@ -218,7 +237,6 @@ api.interceptors.response.use(
   (response) => {
     // Log successful response in development
     if (import.meta.env.DEV) {
-      console.log(`✅ ${response.status} ${response.config.url}`);
     }
     return response;
   },
@@ -355,8 +373,13 @@ export const reportsAPI = {
 // ============================================
 // Orders API
 // ============================================
+export const settingsAPI = {
+  get: () => api.get('/settings'),
+  update: (data) => api.put('/settings', data),
+};
+
 export const ordersAPI = {
-  getAll: () => api.get('/orders'),
+  getAll: (params) => api.get('/orders', params ? { params } : undefined),
   getById: (id) => api.get(`/orders/${id}`),
   create: (data) => {
     const { idempotency_key: idempotencyKey, ...orderData } = data;

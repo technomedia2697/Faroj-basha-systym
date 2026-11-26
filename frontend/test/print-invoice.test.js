@@ -116,3 +116,21 @@ test('printInvoice uses the pre-opened tab and reports when popups are blocked',
   assert.equal(printInvoice({ order_number: 'A-2', items: [] }), false);
   assert.equal(opened, true);
 });
+
+test('printInvoice outputs a customer receipt with prices and a kitchen receipt without prices', () => {
+  let doc = '';
+  const printWindow = { closed: false, document: { open() {}, write(c) { doc = c; }, close() {} }, focus() {} };
+  globalThis.window = { open: () => printWindow };
+  printInvoice({
+    order_number: '12', customer_name: 'Ali', customer_phone: '010', customer_address: 'Street 1',
+    type: 'delivery', notes: 'no onions', items: [{ product_name: 'Item A', quantity: 2, price: 50 }],
+    subtotal: 100, discount: 0, tax: 14, delivery_fee: 10, total: 124, payment_method: 'cash',
+  });
+  const kitchen = doc.slice(doc.indexOf('receipt-kitchen"'), doc.indexOf('<script'));
+  const customer = doc.slice(doc.indexOf('receipt-customer"'), doc.indexOf('receipt-kitchen"'));
+  assert.match(customer, /124\.00/);
+  assert.match(kitchen, /Item A/);
+  assert.match(kitchen, /no onions/);
+  assert.match(kitchen, /Street 1/);
+  assert.doesNotMatch(kitchen, /ج\.م|124|50\.00/);
+});

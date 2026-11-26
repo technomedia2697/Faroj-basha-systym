@@ -1,12 +1,28 @@
 const CUSTOMER_STORAGE_KEY = 'demoCustomers';
 
+// The tax rate lives in the database (set by the admin in Settings, same on every device).
+// This browser keeps a copy of the last rate the server gave it, only so screens have a value before the
+// request returns. The server recomputes tax on every order, so this copy is never what is charged.
+const TAX_CACHE_KEY = 'serverTaxRate';
+
 export function getTaxRate() {
   try {
-    const settings = JSON.parse(localStorage.getItem('appSettings') || '{}');
-    const taxRate = Number(settings.taxRate);
-    return Number.isFinite(taxRate) && taxRate >= 0 ? taxRate : 14;
+    const taxRate = Number(localStorage.getItem(TAX_CACHE_KEY));
+    return localStorage.getItem(TAX_CACHE_KEY) !== null && Number.isFinite(taxRate) && taxRate >= 0 ? taxRate : 14;
   } catch {
     return 14;
+  }
+}
+
+export function cacheTaxRate(rate) {
+  const value = Number(rate);
+  if (!Number.isFinite(value) || value < 0) return;
+  try {
+    const changed = String(value) !== localStorage.getItem(TAX_CACHE_KEY);
+    localStorage.setItem(TAX_CACHE_KEY, String(value));
+    if (changed) window.dispatchEvent(new Event('taxRateChanged'));
+  } catch {
+    // storage unavailable: the query result still drives the screen
   }
 }
 
@@ -37,9 +53,10 @@ export function normalizePhone(phone) {
 
 export function calculateOrderTotals(items, discountPercent, taxRate, deliveryFee = 0) {
   const subtotal = items.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0);
-  const discount = subtotal * Number(discountPercent || 0) / 100;
+  const safeDiscountPercent = Math.min(100, Math.max(0, Number(discountPercent) || 0));
+  const discount = subtotal * safeDiscountPercent / 100;
   const taxableSubtotal = subtotal - discount;
-  const tax = taxableSubtotal * Number(taxRate || 0) / 100;
+  const tax = taxableSubtotal * Math.max(0, Number(taxRate) || 0) / 100;
   const delivery = Number(deliveryFee || 0);
 
   return {
